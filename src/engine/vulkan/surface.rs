@@ -13,6 +13,8 @@ pub struct VulkanSurface {
 
 impl VulkanSurface {
     pub fn new(entry: &Entry, instance: &Instance, window: &Window) -> VkResult<Self> {
+        let loader = surface::Instance::new(entry, instance);
+
         let surface = unsafe {
             ash_window::create_surface(
                 entry,
@@ -22,8 +24,6 @@ impl VulkanSurface {
                 None,
             )?
         };
-
-        let loader = surface::Instance::new(entry, instance);
 
         Ok(Self { surface, loader })
     }

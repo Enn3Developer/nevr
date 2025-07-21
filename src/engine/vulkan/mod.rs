@@ -1,12 +1,14 @@
+pub mod device;
 pub mod surface;
 
 use crate::engine::vulkan::surface::VulkanSurface;
 use ash::prelude::VkResult;
-use ash::vk::{ApplicationInfo, InstanceCreateInfo, PhysicalDevice};
+use ash::vk::{ApplicationInfo, InstanceCreateInfo, PhysicalDevice, PhysicalDeviceProperties};
 use ash::{Entry, Instance, vk};
-use std::ffi::{CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null;
 use std::str::FromStr;
+use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
 
 pub struct Vulkan {
@@ -41,7 +43,7 @@ impl Vulkan {
         unsafe { self.instance.enumerate_physical_devices() }
     }
 
-    pub fn find_physical_device(&self, surface: &VulkanSurface) -> Option<(PhysicalDevice, usize)> {
+    pub fn find_physical_device(&self, surface: &VulkanSurface) -> Option<(PhysicalDevice, u32)> {
         unsafe {
             self.physical_devices().ok()?.iter().find_map(|p| {
                 self.instance
@@ -60,15 +62,57 @@ impl Vulkan {
                                     )
                                     .unwrap();
                         if supports_graphic_and_surface {
-                            Some((*p, index))
+                            Some((*p, index as u32))
                         } else {
                             None
                         }
                     })
             })
+        }
+    }
+
+    pub fn physical_device_properties(
+        &self,
+        physical_device: &PhysicalDevice,
+    ) -> PhysicalDeviceProperties {
+        unsafe {
+            self.instance
+                .get_physical_device_properties(*physical_device)
+        }
+    }
+
+    pub fn physical_device_memory_properties(
+        &self,
+        physical_device: &PhysicalDevice,
+    ) -> vk::PhysicalDeviceMemoryProperties {
+        unsafe {
+            self.instance
+                .get_physical_device_memory_properties(*physical_device)
+        }
+    }
+
+    pub fn add_raytracing_properties(
+        &self,
+        physical_device: &PhysicalDevice,
+        raytracing_properties: &mut vk::PhysicalDeviceRayTracingPipelinePropertiesKHR,
+    ) -> vk::PhysicalDeviceProperties2 {
+        let properties = self.physical_device_properties(physical_device);
+
+        let rt_properties: *mut vk::PhysicalDeviceRayTracingPipelinePropertiesKHR =
+            raytracing_properties;
+
+        let mut properties_2 = vk::PhysicalDeviceProperties2 {
+            properties,
+            p_next: rt_properties.cast::<c_void>(),
+            ..Default::default()
         };
 
-        None
+        unsafe {
+            self.instance
+                .get_physical_device_properties2(*physical_device, &mut properties_2);
+        }
+
+        properties_2
     }
 }
 
@@ -89,6 +133,12 @@ impl From<u32> for VulkanVersion {
 impl From<(u32, u32, u32, u32)> for VulkanVersion {
     fn from(value: (u32, u32, u32, u32)) -> Self {
         Self(vk::make_api_version(value.0, value.1, value.2, value.3))
+    }
+}
+
+impl From<&VulkanVersion> for VulkanVersion {
+    fn from(value: &VulkanVersion) -> Self {
+        Self(value.0)
     }
 }
 
@@ -217,6 +267,21 @@ impl VulkanInstanceCreateInfo {
     pub fn enable_debug(self) -> Self {
         self.add_layer("VK_LAYER_KHRONOS_validation")
             .add_extension("VK_EXT_debug_utils")
+    }
+
+    pub fn add_required_extensions(mut self, window: &Window) -> Self {
+        let mut extensions =
+            ash_window::enumerate_required_extensions(window.display_handle().unwrap().into())
+                .unwrap()
+                .into_iter()
+                .map(|e| unsafe { CStr::from_ptr(*e) })
+                .map(|e| e.to_str().unwrap())
+                .map(|e| CString::from_str(e).unwrap())
+                .collect::<Vec<_>>();
+
+        self.extensions.append(&mut extensions);
+
+        self
     }
 
     pub(crate) fn as_instance_create_info(
