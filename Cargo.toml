@@ -1,0 +1,11 @@
+[package]
+name = "nevr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ash = "0.38.0"
+ash-window = "0.13.0"
+winit = { version = "0.30.11", features = ["rwh_06"] }
+glam = "0.30.4"
+bytemuck = "1.23.1"
