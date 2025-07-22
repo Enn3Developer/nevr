@@ -1,5 +1,8 @@
 pub mod device;
+pub mod pipeline;
+pub mod shader;
 pub mod surface;
+pub mod swapchain;
 
 use crate::engine::vulkan::surface::VulkanSurface;
 use ash::prelude::VkResult;

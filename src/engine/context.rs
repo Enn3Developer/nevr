@@ -1,17 +1,28 @@
 use crate::engine::vulkan::Vulkan;
 use crate::engine::vulkan::surface::VulkanSurface;
 use crate::vulkan::device::VulkanDevice;
+use crate::vulkan::pipeline::VulkanPipeline;
+use crate::vulkan::shader::VulkanShader;
+use crate::vulkan::swapchain::VulkanSwapchain;
 use crate::vulkan::{VulkanApplicationInfo, VulkanInstanceCreateInfo};
 use ash::vk;
+use ash::vk::{DescriptorType, MemoryAllocateFlags, ShaderStageFlags};
 use std::ffi::CStr;
+use std::ptr::null;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
 
 pub struct GraphicsContext {
-    vulkan: Vulkan,
     window: Window,
-    surface: VulkanSurface,
+    raygen_shader: VulkanShader,
+    raychit_shader: VulkanShader,
+    raymiss_shader: VulkanShader,
+    raymiss_shadow_shader: VulkanShader,
+    pipeline: VulkanPipeline,
+    swapchain: VulkanSwapchain,
     device: VulkanDevice,
+    surface: VulkanSurface,
+    vulkan: Vulkan,
 }
 
 impl GraphicsContext {
@@ -90,7 +101,88 @@ impl GraphicsContext {
             ..Default::default()
         };
 
-        let device = VulkanDevice::new(
+        let descriptor_pool_sizes = vec![
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                descriptor_count: 1,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 4,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1,
+            },
+        ];
+
+        let descriptor_set_layout_bindings = vec![
+            vk::DescriptorSetLayoutBinding {
+                binding: 0,
+                descriptor_type: DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::RAYGEN_KHR | ShaderStageFlags::CLOSEST_HIT_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 1,
+                descriptor_type: DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::RAYGEN_KHR | ShaderStageFlags::CLOSEST_HIT_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 2,
+                descriptor_type: DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 3,
+                descriptor_type: DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 4,
+                descriptor_type: DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::RAYGEN_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+        ];
+
+        let material_descriptor_set_layout_bindings = vec![
+            vk::DescriptorSetLayoutBinding {
+                binding: 0,
+                descriptor_type: DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 1,
+                descriptor_type: DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1,
+                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
+                p_immutable_samplers: null(),
+                _marker: Default::default(),
+            },
+        ];
+
+        let mut device = VulkanDevice::new(
             &vulkan,
             &physical_device,
             queue_family_index,
@@ -105,14 +197,62 @@ impl GraphicsContext {
             ],
             &raytracing_pipeline_features,
             &device_features,
+            descriptor_pool_sizes,
+            descriptor_set_layout_bindings,
+            material_descriptor_set_layout_bindings,
         )
         .unwrap();
+
+        let memory_allocate_flags = vk::MemoryAllocateFlagsInfo {
+            flags: MemoryAllocateFlags::DEVICE_ADDRESS,
+            device_mask: 0,
+            ..Default::default()
+        };
+
+        let swapchain =
+            VulkanSwapchain::new(&vulkan, &physical_device, &mut device, &surface).unwrap();
+
+        let raygen_shader = VulkanShader::new_with_content(
+            include_bytes!("../../shaders/shader.rgen.spv"),
+            &device,
+        )
+        .unwrap();
+        let raychit_shader = VulkanShader::new_with_content(
+            include_bytes!("../../shaders/shader.rchit.spv"),
+            &device,
+        )
+        .unwrap();
+        let raymiss_shader = VulkanShader::new_with_content(
+            include_bytes!("../../shaders/shader.rmiss.spv"),
+            &device,
+        )
+        .unwrap();
+        let raymiss_shadow_shader = VulkanShader::new_with_content(
+            include_bytes!("../../shaders/shader_shadow.rmiss.spv"),
+            &device,
+        )
+        .unwrap();
+
+        let pipeline = device
+            .create_pipeline([
+                &raygen_shader,
+                &raychit_shader,
+                &raymiss_shader,
+                &raymiss_shadow_shader,
+            ])
+            .unwrap();
 
         Some(Self {
             vulkan,
             window,
             surface,
             device,
+            swapchain,
+            pipeline,
+            raygen_shader,
+            raychit_shader,
+            raymiss_shader,
+            raymiss_shadow_shader,
         })
     }
 }

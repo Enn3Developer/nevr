@@ -1,7 +1,8 @@
+use crate::vulkan::Vulkan;
 use ash::khr::surface;
 use ash::prelude::VkResult;
-use ash::vk::SurfaceKHR;
-use ash::{Entry, Instance};
+use ash::vk::{PresentModeKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR, SurfaceKHR};
+use ash::{Entry, Instance, vk};
 use std::ops::{Deref, DerefMut};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
@@ -34,6 +35,36 @@ impl VulkanSurface {
 
     pub fn loader(&self) -> &surface::Instance {
         &self.loader
+    }
+
+    pub fn get_surface_capabilities(
+        &self,
+        physical_device: &vk::PhysicalDevice,
+    ) -> VkResult<SurfaceCapabilitiesKHR> {
+        unsafe {
+            self.loader
+                .get_physical_device_surface_capabilities(*physical_device, self.surface)
+        }
+    }
+
+    pub fn get_surface_formats(
+        &self,
+        physical_device: &vk::PhysicalDevice,
+    ) -> VkResult<Vec<SurfaceFormatKHR>> {
+        unsafe {
+            self.loader
+                .get_physical_device_surface_formats(*physical_device, self.surface)
+        }
+    }
+
+    pub fn get_present_modes(
+        &self,
+        physical_device: &vk::PhysicalDevice,
+    ) -> VkResult<Vec<PresentModeKHR>> {
+        unsafe {
+            self.loader
+                .get_physical_device_surface_present_modes(*physical_device, self.surface)
+        }
     }
 }
 
