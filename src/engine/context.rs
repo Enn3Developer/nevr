@@ -12,6 +12,13 @@ use std::ptr::null;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
 
+struct Material {
+    ambient: [f32; 3],
+    diffuse: [f32; 3],
+    specular: [f32; 3],
+    emission: [f32; 3],
+}
+
 pub struct GraphicsContext {
     window: Window,
     raygen_shader: VulkanShader,
@@ -241,6 +248,24 @@ impl GraphicsContext {
                 &raymiss_shadow_shader,
             ])
             .unwrap();
+
+        let vertices = [(10, 10, 10), (10, 11, 10), (11, 10, 10), (10, 10, 11)];
+        let indices = [(0, 1, 2), (1, 2, 3)];
+        let primitive_count = 2;
+        let materials = [
+            Material {
+                ambient: [0.0, 0.0, 0.0],
+                diffuse: [1.0, 0.0, 0.0],
+                specular: [0.2, 0.2, 0.2],
+                emission: [0.5, 0.0, 0.0],
+            },
+            Material {
+                ambient: [0.0, 0.0, 0.0],
+                diffuse: [0.0, 0.0, 1.0],
+                specular: [0.8, 0.8, 0.8],
+                emission: [0.0, 0.0, 0.5],
+            },
+        ];
 
         Some(Self {
             vulkan,
