@@ -1,35 +1,31 @@
-use crate::buffer::VulkanBuffer;
-use foldhash::HashMap;
+use bytemuck::{Pod, Zeroable};
+use glam::{Mat4, Vec3};
 use std::iter;
+use std::ops::Deref;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
-    AccelerationStructure, AccelerationStructureBuildGeometryInfo,
+    AabbPositions, AccelerationStructure, AccelerationStructureBuildGeometryInfo,
     AccelerationStructureBuildRangeInfo, AccelerationStructureBuildType,
     AccelerationStructureCreateInfo, AccelerationStructureGeometries,
-    AccelerationStructureGeometryInstancesData, AccelerationStructureGeometryInstancesDataType,
-    AccelerationStructureGeometryTrianglesData, AccelerationStructureInstance,
-    AccelerationStructureType, BuildAccelerationStructureFlags, BuildAccelerationStructureMode,
-    TransformMatrix,
+    AccelerationStructureGeometryAabbsData, AccelerationStructureGeometryInstancesData,
+    AccelerationStructureGeometryInstancesDataType, AccelerationStructureGeometryTrianglesData,
+    AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
+    BuildAccelerationStructureMode,
 };
-use vulkano::buffer::{
-    Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer,
-};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer};
 use vulkano::command_buffer::allocator::{
-    CommandBufferAllocator, StandardCommandBufferAllocator,
-    StandardCommandBufferAllocatorCreateInfo,
+    StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferLevel, CommandBufferSubmitInfo, CommandBufferUsage,
-    CopyImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SubmitInfo,
+    AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
+    PrimaryCommandBufferAbstract,
 };
 use vulkano::descriptor_set::allocator::{
-    StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
+    DescriptorSetAllocator, StandardDescriptorSetAllocator,
+    StandardDescriptorSetAllocatorCreateInfo,
 };
 use vulkano::descriptor_set::layout::{
     DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
-};
-use vulkano::descriptor_set::pool::{
-    DescriptorPool, DescriptorPoolAlloc, DescriptorPoolCreateInfo, DescriptorSetAllocateInfo,
 };
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::PhysicalDeviceType;
@@ -37,24 +33,23 @@ use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
 };
 use vulkano::format::Format;
-use vulkano::image::sampler::ComponentMapping;
-use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
-use vulkano::image::{
-    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling,
-    ImageType, ImageUsage, SampleCount,
+use vulkano::image::view::ImageView;
+use vulkano::image::{Image, ImageFormatInfo, ImageUsage};
+use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
+use vulkano::memory::allocator::{
+    AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryAllocator, MemoryTypeFilter,
+    StandardMemoryAllocator,
 };
-use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::layout::PipelineLayoutCreateInfo;
 use vulkano::pipeline::ray_tracing::{
     RayTracingPipeline, RayTracingPipelineCreateInfo, RayTracingShaderGroupCreateInfo,
+    ShaderBindingTable,
 };
-use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::{PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::shader::ShaderStages;
-use vulkano::swapchain::{Surface, Swapchain, SwapchainCreateInfo};
-use vulkano::sync::fence::{Fence, FenceCreateInfo};
-use vulkano::sync::{GpuFuture, ImageMemoryBarrier};
-use vulkano::{Version, VulkanLibrary};
+use vulkano::swapchain::{PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo};
+use vulkano::sync::GpuFuture;
+use vulkano::{Version, VulkanLibrary, sync};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
 
@@ -65,32 +60,64 @@ struct Material {
     emission: [f32; 3],
 }
 
-#[derive(BufferContents, Clone)]
+#[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
-struct Camera {
-    camera_position: [f32; 4],
-    camera_right: [f32; 4],
-    camera_up: [f32; 4],
-    camera_forward: [f32; 4],
+pub struct Voxel {
+    center: [f32; 3],
+    _padding1: u32,
+    color: [f32; 3],
+    _padding2: u32,
+}
 
-    frame_count: u32,
+impl From<Voxel> for AabbPositions {
+    fn from(voxel: Voxel) -> Self {
+        AabbPositions {
+            min: (Vec3::from_array(voxel.center) - Vec3::splat(1.0 / 32.0)).into(),
+            max: (Vec3::from_array(voxel.center) + Vec3::splat(1.0 / 32.0)).into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Camera {
+    pub projection: Mat4,
+    pub view: Mat4,
+}
+
+impl<C: Deref<Target = Camera>> From<C> for raygen::Camera {
+    fn from(camera: C) -> Self {
+        raygen::Camera {
+            view_proj: (camera.projection * camera.view).to_cols_array_2d(),
+            view_inverse: camera.view.inverse().to_cols_array_2d(),
+            proj_inverse: camera.projection.inverse().to_cols_array_2d(),
+        }
+    }
 }
 
 pub struct GraphicsContext {
-    window: Arc<Window>,
-    library: Arc<VulkanLibrary>,
     instance: Arc<Instance>,
-    device: Arc<Device>,
-    surface: Arc<Surface>,
-    swapchain: Arc<Swapchain>,
-    queue: Arc<Queue>,
-    memory_allocator: Arc<StandardMemoryAllocator>,
-    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    pub(crate) device: Arc<Device>,
+    pub(crate) queue: Arc<Queue>,
+    pub(crate) command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    pub(crate) window: Arc<Window>,
+    pub(crate) swapchain: Arc<Swapchain>,
+    pub(crate) previous_frame: Option<Box<dyn GpuFuture>>,
+    pub(crate) recreate_swapchain: bool,
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    descriptor_set: Arc<DescriptorSet>,
+    intersect_descriptor_set: Arc<DescriptorSet>,
+    swapchain_image_sets: Vec<(Arc<ImageView>, Arc<DescriptorSet>)>,
+    descriptor_set_allocator: Arc<dyn DescriptorSetAllocator>,
+    pipeline_layout: Arc<PipelineLayout>,
+    shader_binding_table: ShaderBindingTable,
     pipeline: Arc<RayTracingPipeline>,
     blas: Arc<AccelerationStructure>,
     tlas: Arc<AccelerationStructure>,
     camera: Camera,
-    camera_buffer: VulkanBuffer<Camera>,
+    camera_buffer: Subbuffer<raygen::Camera>,
+    raygen_camera: Arc<raygen::Camera>,
+    pub(crate) builder: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
+    pub(crate) image_index: Option<u32>,
 }
 
 impl GraphicsContext {
@@ -101,303 +128,351 @@ impl GraphicsContext {
         attributes: WindowAttributes,
     ) -> Option<Self> {
         let window = Arc::new(event_loop.create_window(attributes).ok()?);
-        let required_extensions = Surface::required_extensions(&event_loop).unwrap();
 
-        let library = VulkanLibrary::new().unwrap();
+        let vulkan = VulkanLibrary::new().ok()?;
+        let required_extensions = Surface::required_extensions(event_loop).ok()?;
         let instance = Instance::new(
-            library.clone(),
+            vulkan,
             InstanceCreateInfo {
-                application_version: *app_version,
                 application_name: Some(app_name.to_string()),
-                enabled_extensions: required_extensions,
+                application_version: *app_version,
                 flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+                enabled_extensions: InstanceExtensions {
+                    ext_swapchain_colorspace: true,
+                    ..required_extensions
+                },
                 ..Default::default()
             },
         )
-        .unwrap();
+        .ok()?;
 
-        let extensions = DeviceExtensions {
-            khr_ray_tracing_pipeline: true,
-            khr_acceleration_structure: true,
-            ext_descriptor_indexing: true,
-            khr_maintenance3: true,
-            khr_buffer_device_address: true,
-            khr_deferred_host_operations: true,
+        let device_extensions = DeviceExtensions {
             khr_swapchain: true,
-            ..Default::default()
+            khr_ray_tracing_pipeline: true,
+            khr_ray_tracing_maintenance1: true,
+            khr_synchronization2: true,
+            khr_deferred_host_operations: true,
+            khr_acceleration_structure: true,
+            khr_push_descriptor: true,
+            ..DeviceExtensions::empty()
         };
 
-        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+        let device_features = DeviceFeatures {
+            acceleration_structure: true,
+            ray_tracing_pipeline: true,
+            buffer_device_address: true,
+            synchronization2: true,
+            ..DeviceFeatures::default()
+        };
 
         let (physical_device, queue_family_index) = instance
             .enumerate_physical_devices()
             .unwrap()
-            .filter(|p| p.supported_extensions().contains(&extensions))
+            .filter(|p| p.api_version() >= Version::V1_3)
+            .filter(|p| {
+                p.supported_extensions().contains(&device_extensions)
+                    && p.supported_features().contains(&device_features)
+            })
             .filter_map(|p| {
                 p.queue_family_properties()
                     .iter()
                     .enumerate()
                     .position(|(i, q)| {
-                        q.queue_flags.contains(QueueFlags::GRAPHICS)
-                            && p.surface_support(i as u32, &surface).unwrap_or(false)
+                        q.queue_flags
+                            .contains(QueueFlags::GRAPHICS | QueueFlags::COMPUTE)
+                            && p.presentation_support(i as u32, event_loop).unwrap()
                     })
-                    .map(|q| (p, q as u32))
+                    .map(|i| (p, i as u32))
             })
             .min_by_key(|(p, _)| match p.properties().device_type {
                 PhysicalDeviceType::DiscreteGpu => 0,
                 PhysicalDeviceType::IntegratedGpu => 1,
                 PhysicalDeviceType::VirtualGpu => 2,
                 PhysicalDeviceType::Cpu => 3,
-                _ => 4,
-            })
-            .unwrap();
+                PhysicalDeviceType::Other => 4,
+                _ => 5,
+            })?;
+
+        println!(
+            "Using device: {} (type: {:?})",
+            physical_device.properties().device_name,
+            physical_device.properties().device_type,
+        );
 
         let (device, mut queues) = Device::new(
-            physical_device.clone(),
+            physical_device,
             DeviceCreateInfo {
-                enabled_features: DeviceFeatures {
-                    acceleration_structure: true,
-                    buffer_device_address: true,
-                    ray_tracing_pipeline: true,
-                    geometry_shader: true,
-                    ..Default::default()
-                },
-                enabled_extensions: extensions,
+                enabled_extensions: device_extensions,
                 queue_create_infos: vec![QueueCreateInfo {
                     queue_family_index,
                     ..Default::default()
                 }],
+                enabled_features: device_features,
                 ..Default::default()
             },
         )
-        .unwrap();
+        .ok()?;
 
-        let queue = queues.next().unwrap();
-        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+        let queue = queues.next()?;
 
-        let caps = physical_device
-            .surface_capabilities(&surface, Default::default())
-            .unwrap();
+        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+            device.clone(),
+            StandardCommandBufferAllocatorCreateInfo::default(),
+        ));
 
-        let dimensions = window.inner_size();
-        let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
-        let image_format = physical_device
-            .surface_formats(&surface, Default::default())
-            .unwrap()[0]
-            .0;
+        let surface = Surface::from_window(instance.clone(), window.clone()).ok()?;
+        let window_size = window.inner_size();
+
+        let surface_capabilities = device
+            .physical_device()
+            .surface_capabilities(&surface, SurfaceInfo::default())
+            .ok()?;
+
+        let (image_format, image_color_space) = device
+            .physical_device()
+            .surface_formats(&surface, SurfaceInfo::default())
+            .ok()?
+            .into_iter()
+            .find(|(format, _)| {
+                device
+                    .physical_device()
+                    .image_format_properties(ImageFormatInfo {
+                        format: *format,
+                        usage: ImageUsage::STORAGE,
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .is_some()
+            })?;
 
         let (swapchain, images) = Swapchain::new(
             device.clone(),
-            surface.clone(),
+            surface,
             SwapchainCreateInfo {
-                min_image_count: caps.min_image_count + 1,
+                min_image_count: surface_capabilities.min_image_count.max(2),
                 image_format,
-                image_extent: dimensions.into(),
-                image_usage: ImageUsage::TRANSFER_DST,
-                composite_alpha,
+                image_color_space,
+                image_extent: window_size.into(),
+                image_usage: ImageUsage::STORAGE,
+                composite_alpha: surface_capabilities
+                    .supported_composite_alpha
+                    .into_iter()
+                    .next()?,
+                present_mode: PresentMode::Mailbox,
                 ..Default::default()
             },
         )
-        .unwrap();
+        .ok()?;
+
+        let pipeline_layout = PipelineLayout::new(
+            device.clone(),
+            PipelineLayoutCreateInfo {
+                set_layouts: vec![
+                    DescriptorSetLayout::new(
+                        device.clone(),
+                        DescriptorSetLayoutCreateInfo {
+                            bindings: [
+                                (
+                                    0,
+                                    DescriptorSetLayoutBinding {
+                                        stages: ShaderStages::RAYGEN,
+                                        ..DescriptorSetLayoutBinding::descriptor_type(
+                                            DescriptorType::AccelerationStructure,
+                                        )
+                                    },
+                                ),
+                                (
+                                    1,
+                                    DescriptorSetLayoutBinding {
+                                        stages: ShaderStages::RAYGEN,
+                                        ..DescriptorSetLayoutBinding::descriptor_type(
+                                            DescriptorType::UniformBuffer,
+                                        )
+                                    },
+                                ),
+                            ]
+                            .into(),
+                            ..Default::default()
+                        },
+                    )
+                    .ok()?,
+                    DescriptorSetLayout::new(
+                        device.clone(),
+                        DescriptorSetLayoutCreateInfo {
+                            bindings: [(
+                                0,
+                                DescriptorSetLayoutBinding {
+                                    stages: ShaderStages::RAYGEN,
+                                    ..DescriptorSetLayoutBinding::descriptor_type(
+                                        DescriptorType::StorageImage,
+                                    )
+                                },
+                            )]
+                            .into(),
+                            ..Default::default()
+                        },
+                    )
+                    .ok()?,
+                    DescriptorSetLayout::new(
+                        device.clone(),
+                        DescriptorSetLayoutCreateInfo {
+                            bindings: [(
+                                0,
+                                DescriptorSetLayoutBinding {
+                                    stages: ShaderStages::INTERSECTION | ShaderStages::CLOSEST_HIT,
+                                    ..DescriptorSetLayoutBinding::descriptor_type(
+                                        DescriptorType::StorageBuffer,
+                                    )
+                                },
+                            )]
+                            .into(),
+                            ..Default::default()
+                        },
+                    )
+                    .ok()?,
+                ],
+                ..Default::default()
+            },
+        )
+        .ok()?;
+
+        let sizes = device
+            .physical_device()
+            .memory_properties()
+            .memory_types
+            .iter()
+            .map(|m| {
+                device.physical_device().memory_properties().memory_heaps[m.heap_index as usize]
+                    .size
+            })
+            .collect::<Vec<_>>();
+
+        let memory_allocator = Arc::new(StandardMemoryAllocator::new(
+            device.clone(),
+            GenericMemoryAllocatorCreateInfo {
+                block_sizes: &sizes,
+                ..Default::default()
+            },
+        ));
 
         let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
             device.clone(),
             StandardDescriptorSetAllocatorCreateInfo::default(),
         ));
 
-        let descriptor_set_layout = DescriptorSetLayout::new(
-            device.clone(),
-            DescriptorSetLayoutCreateInfo {
-                bindings: [
-                    (
-                        0,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::AccelerationStructure,
-                            )
-                        },
-                    ),
-                    (
-                        1,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::UniformBuffer,
-                            )
-                        },
-                    ),
-                    (
-                        2,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::CLOSEST_HIT,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::StorageBuffer,
-                            )
-                        },
-                    ),
-                    (
-                        3,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::CLOSEST_HIT,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::StorageBuffer,
-                            )
-                        },
-                    ),
-                    (
-                        4,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::RAYGEN,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::StorageImage,
-                            )
-                        },
-                    ),
-                ]
-                .into(),
-                ..Default::default()
+        let pipeline = {
+            let raygen = raygen::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let closest_hit = raychit::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let miss = raymiss::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let intersect = rayintersect::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(raygen),
+                PipelineShaderStageCreateInfo::new(closest_hit),
+                PipelineShaderStageCreateInfo::new(miss),
+                PipelineShaderStageCreateInfo::new(intersect),
+            ];
+
+            let groups = [
+                RayTracingShaderGroupCreateInfo::General { general_shader: 0 },
+                RayTracingShaderGroupCreateInfo::General { general_shader: 2 },
+                RayTracingShaderGroupCreateInfo::ProceduralHit {
+                    closest_hit_shader: Some(1),
+                    any_hit_shader: None,
+                    intersection_shader: 3,
+                },
+            ];
+
+            RayTracingPipeline::new(
+                device.clone(),
+                None,
+                RayTracingPipelineCreateInfo {
+                    stages: stages.to_vec().into(),
+                    groups: groups.to_vec().into(),
+                    max_pipeline_ray_recursion_depth: 1,
+                    ..RayTracingPipelineCreateInfo::layout(pipeline_layout.clone())
+                },
+            )
+            .ok()?
+        };
+
+        let voxels = [
+            Voxel {
+                center: [-2.0, 0.0, -1.2],
+                color: [0.0, 0.0, 1.0],
+                _padding1: 0,
+                _padding2: 0,
             },
-        )
-        .unwrap();
-
-        let material_descriptor_set_layout = DescriptorSetLayout::new(
-            device.clone(),
-            DescriptorSetLayoutCreateInfo {
-                bindings: [
-                    (
-                        0,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::CLOSEST_HIT,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::StorageBuffer,
-                            )
-                        },
-                    ),
-                    (
-                        1,
-                        DescriptorSetLayoutBinding {
-                            stages: ShaderStages::CLOSEST_HIT,
-                            ..DescriptorSetLayoutBinding::descriptor_type(
-                                DescriptorType::StorageBuffer,
-                            )
-                        },
-                    ),
-                ]
-                .into(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let descriptor_set_layouts = vec![
-            descriptor_set_layout.clone(),
-            material_descriptor_set_layout.clone(),
-        ];
-
-        let pipeline_layout = PipelineLayout::new(
-            device.clone(),
-            PipelineLayoutCreateInfo {
-                set_layouts: descriptor_set_layouts,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let rchit = raychit::load(device.clone()).unwrap();
-        let raygen = raygen::load(device.clone()).unwrap();
-        let rmiss = raymiss::load(device.clone()).unwrap();
-        let rmiss_shadow = raymiss_shadow::load(device.clone()).unwrap();
-
-        let pipeline = RayTracingPipeline::new(
-            device.clone(),
-            None,
-            RayTracingPipelineCreateInfo {
-                stages: vec![
-                    PipelineShaderStageCreateInfo::new(rchit.entry_point("main").unwrap()),
-                    PipelineShaderStageCreateInfo::new(raygen.entry_point("main").unwrap()),
-                    PipelineShaderStageCreateInfo::new(rmiss.entry_point("main").unwrap()),
-                    PipelineShaderStageCreateInfo::new(rmiss_shadow.entry_point("main").unwrap()),
-                ]
-                .into(),
-                groups: vec![
-                    RayTracingShaderGroupCreateInfo::TrianglesHit {
-                        closest_hit_shader: Some(0),
-                        any_hit_shader: None,
-                    },
-                    RayTracingShaderGroupCreateInfo::General { general_shader: 1 },
-                    RayTracingShaderGroupCreateInfo::General { general_shader: 2 },
-                    RayTracingShaderGroupCreateInfo::General { general_shader: 3 },
-                ]
-                .into(),
-                max_pipeline_ray_recursion_depth: 1,
-                ..RayTracingPipelineCreateInfo::layout(pipeline_layout)
-            },
-        )
-        .unwrap();
-
-        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
-            device.clone(),
-            StandardCommandBufferAllocatorCreateInfo {
-                primary_buffer_count: 16,
-                ..Default::default()
-            },
-        ));
-
-        let vertices = [[10, 10, 10], [10, 11, 10], [11, 10, 10], [10, 11, 10]];
-        let indices = [0, 1, 2, 1, 2, 3];
-        let primitive_count = 2;
-        let materials = [
-            Material {
-                ambient: [0.0, 0.0, 0.0],
-                diffuse: [1.0, 0.0, 0.0],
-                specular: [0.2, 0.2, 0.2],
-                emission: [0.5, 0.0, 0.0],
-            },
-            Material {
-                ambient: [0.0, 0.0, 0.0],
-                diffuse: [0.0, 0.0, 1.0],
-                specular: [0.8, 0.8, 0.8],
-                emission: [0.0, 0.0, 0.5],
+            Voxel {
+                center: [-2.0, 0.0, -1.0],
+                color: [1.0, 0.0, 0.0],
+                _padding1: 0,
+                _padding2: 0,
             },
         ];
 
-        let vertex_buffer = VulkanBuffer::new(
+        let voxel_data = Buffer::from_data(
             memory_allocator.clone(),
-            vertices,
-            BufferUsage::SHADER_DEVICE_ADDRESS
-                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                | BufferUsage::STORAGE_BUFFER,
-        );
-        let index_buffer = VulkanBuffer::new(
-            memory_allocator.clone(),
-            indices,
-            BufferUsage::SHADER_DEVICE_ADDRESS
-                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                | BufferUsage::STORAGE_BUFFER,
-        );
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            voxels.clone(),
+        )
+        .ok()?;
 
+        let voxel_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::SHADER_DEVICE_ADDRESS
+                    | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            voxels.clone().into_iter().map(|v| AabbPositions::from(v)),
+        )
+        .ok()?;
+
+        // Build the bottom-level acceleration structure and then the top-level acceleration
+        // structure. Acceleration structures are used to accelerate ray tracing. The bottom-level
+        // acceleration structure contains the geometry data. The top-level acceleration structure
+        // contains the instances of the bottom-level acceleration structures. In our shader, we
+        // will trace rays against the top-level acceleration structure.
         let blas = unsafe {
-            build_acceleration_structure_triangles(
-                primitive_count,
-                vertex_buffer.device_buffer.clone(),
-                index_buffer.device_buffer.clone(),
+            build_acceleration_structure_voxels(
+                &voxel_buffer,
                 memory_allocator.clone(),
                 command_buffer_allocator.clone(),
                 device.clone(),
                 queue.clone(),
             )
         };
-
         let tlas = unsafe {
             build_top_level_acceleration_structure(
                 vec![AccelerationStructureInstance {
                     acceleration_structure_reference: blas.device_address().into(),
-                    transform: TransformMatrix::from([
-                        [1.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0, 0.0],
-                    ]),
                     ..Default::default()
                 }],
                 memory_allocator.clone(),
@@ -407,125 +482,138 @@ impl GraphicsContext {
             )
         };
 
-        let camera = Camera {
-            camera_position: [0.0, 0.0, 0.0, 1.0],
-            camera_right: [1.0, 0.0, 0.0, 1.0],
-            camera_up: [0.0, 1.0, 0.0, 1.0],
-            camera_forward: [0.0, 0.0, 1.0, 1.0],
-            frame_count: 0,
-        };
-
-        let camera_buffer = VulkanBuffer::new_with_data(
-            memory_allocator.clone(),
-            camera.clone(),
-            BufferUsage::UNIFORM_BUFFER,
+        let proj = Mat4::perspective_rh(90.0_f32.to_radians(), 16.0 / 9.0, 0.001, 1000.0);
+        let view = Mat4::look_at_rh(
+            Vec3::new(-2.0, 2.0, 1.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, -1.0, 0.0),
         );
 
-        let image = Image::new(
+        let camera = Camera {
+            projection: proj,
+            view,
+        };
+
+        let raygen_camera = Arc::new(raygen::Camera::from(&camera));
+
+        let camera_buffer = Buffer::from_data(
             memory_allocator.clone(),
-            ImageCreateInfo {
-                image_type: ImageType::Dim2d,
-                format: image_format,
-                extent: [dimensions.width, dimensions.height, 1],
-                mip_levels: 1,
-                array_layers: 1,
-                samples: SampleCount::Sample1,
-                tiling: ImageTiling::Optimal,
-                usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
+            *raygen_camera,
         )
-        .unwrap();
-
-        let image_view = ImageView::new(
-            image.clone(),
-            ImageViewCreateInfo {
-                view_type: ImageViewType::Dim2d,
-                format: image_format,
-                component_mapping: ComponentMapping::identity(),
-                subresource_range: ImageSubresourceRange {
-                    aspects: ImageAspects::COLOR,
-                    mip_levels: 0..1,
-                    array_layers: 0..1,
-                },
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let image_memory_barrier = ImageMemoryBarrier {
-            old_layout: ImageLayout::Undefined,
-            new_layout: ImageLayout::General,
-            subresource_range: ImageSubresourceRange {
-                aspects: ImageAspects::COLOR,
-                mip_levels: 0..1,
-                array_layers: 0..1,
-            },
-            ..ImageMemoryBarrier::image(image.clone())
-        };
-
-        let image_fence = Fence::new(device.clone(), FenceCreateInfo::default()).unwrap();
-
-        let builder = AutoCommandBufferBuilder::primary(
-            command_buffer_allocator.clone(),
-            queue_family_index,
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
-
-        let fence = builder
-            .build()
-            .unwrap()
-            .execute(queue.clone())
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap();
-
-        fence.wait(None).unwrap();
-
-        let write_descriptor_sets = vec![
-            WriteDescriptorSet::acceleration_structure(0, tlas.clone()),
-            WriteDescriptorSet::buffer(1, camera_buffer.device_buffer.clone()),
-            WriteDescriptorSet::buffer(2, index_buffer.device_buffer.clone()),
-            WriteDescriptorSet::buffer(3, vertex_buffer.device_buffer.clone()),
-            WriteDescriptorSet::image_view(4, image_view.clone()),
-        ];
+        .ok()?;
 
         let descriptor_set = DescriptorSet::new(
             descriptor_set_allocator.clone(),
-            descriptor_set_layout,
-            write_descriptor_sets,
-            None,
+            pipeline_layout.set_layouts()[0].clone(),
+            [
+                WriteDescriptorSet::acceleration_structure(0, tlas.clone()),
+                WriteDescriptorSet::buffer(1, camera_buffer.clone()),
+            ],
+            [],
         )
-        .unwrap();
+        .ok()?;
+
+        let intersect_descriptor_set = DescriptorSet::new(
+            descriptor_set_allocator.clone(),
+            pipeline_layout.set_layouts()[2].clone(),
+            [WriteDescriptorSet::buffer(0, voxel_data.clone())],
+            [],
+        )
+        .ok()?;
+
+        let swapchain_image_sets = window_size_dependent_setup(
+            images,
+            pipeline_layout.clone(),
+            descriptor_set_allocator.clone(),
+        );
+
+        let shader_binding_table =
+            ShaderBindingTable::new(memory_allocator.clone(), &pipeline).unwrap();
+
+        let previous_frame = Some(sync::now(device.clone()).boxed());
 
         Some(Self {
-            window,
-            library,
             instance,
             device,
-            surface,
-            swapchain,
             queue,
-            memory_allocator,
             command_buffer_allocator,
+            window,
+            swapchain,
+            previous_frame,
+            memory_allocator,
+            descriptor_set,
+            intersect_descriptor_set,
+            swapchain_image_sets,
+            descriptor_set_allocator,
+            pipeline_layout,
+            shader_binding_table,
             pipeline,
             blas,
             tlas,
             camera,
             camera_buffer,
+            raygen_camera,
+            recreate_swapchain: false,
+            builder: None,
+            image_index: None,
         })
+    }
+
+    pub(crate) fn resize(&mut self, images: Vec<Arc<Image>>) {
+        self.swapchain_image_sets = window_size_dependent_setup(
+            images,
+            self.pipeline_layout.clone(),
+            self.descriptor_set_allocator.clone(),
+        );
+    }
+
+    pub(crate) fn draw(&mut self) {
+        let builder = self.builder.as_mut().unwrap();
+
+        builder
+            .update_buffer(self.camera_buffer.clone(), self.raygen_camera.clone())
+            .unwrap();
+
+        builder
+            .bind_descriptor_sets(
+                PipelineBindPoint::RayTracing,
+                self.pipeline_layout.clone(),
+                0,
+                vec![
+                    self.descriptor_set.clone(),
+                    self.swapchain_image_sets[self.image_index.unwrap() as usize]
+                        .1
+                        .clone(),
+                    self.intersect_descriptor_set.clone(),
+                ],
+            )
+            .unwrap()
+            .bind_pipeline_ray_tracing(self.pipeline.clone())
+            .unwrap();
+
+        let extent = self.swapchain_image_sets[self.image_index.unwrap() as usize]
+            .0
+            .image()
+            .extent();
+
+        unsafe { builder.trace_rays(self.shader_binding_table.addresses().clone(), extent) }
+            .unwrap();
     }
 }
 
 mod raygen {
     vulkano_shaders::shader! {
         ty: "raygen",
-        path: "./shaders/shader.rgen",
+        path: "./shaders/rgen.glsl",
         vulkan_version: "1.3"
     }
 }
@@ -533,7 +621,7 @@ mod raygen {
 mod raychit {
     vulkano_shaders::shader! {
         ty: "closesthit",
-        path: "./shaders/shader.rchit",
+        path: "./shaders/rchit.glsl",
         vulkan_version: "1.3"
     }
 }
@@ -541,17 +629,50 @@ mod raychit {
 mod raymiss {
     vulkano_shaders::shader! {
         ty: "miss",
-        path: "./shaders/shader.rmiss",
+        path: "./shaders/rmiss.glsl",
         vulkan_version: "1.3"
     }
 }
 
-mod raymiss_shadow {
+mod rayintersect {
     vulkano_shaders::shader! {
-        ty: "miss",
-        path: "./shaders/shader_shadow.rmiss",
+        ty: "intersection",
+        path: "./shaders/rintersect.glsl",
         vulkan_version: "1.3"
     }
+}
+
+// mod raymiss_shadow {
+//     vulkano_shaders::shader! {
+//         ty: "miss",
+//         path: "./shaders/shader_shadow.rmiss",
+//         vulkan_version: "1.3"
+//     }
+// }
+
+/// This function is called once during initialization, then again whenever the window is resized.
+fn window_size_dependent_setup(
+    images: Vec<Arc<Image>>,
+    pipeline_layout: Arc<PipelineLayout>,
+    descriptor_set_allocator: Arc<dyn DescriptorSetAllocator>,
+) -> Vec<(Arc<ImageView>, Arc<DescriptorSet>)> {
+    let swapchain_image_sets = images
+        .into_iter()
+        .map(|image| {
+            let image_view = ImageView::new_default(image).unwrap();
+            let descriptor_set = DescriptorSet::new(
+                descriptor_set_allocator.clone(),
+                pipeline_layout.set_layouts()[1].clone(),
+                [WriteDescriptorSet::image_view(0, image_view.clone())],
+                [],
+            )
+            .unwrap();
+
+            (image_view, descriptor_set)
+        })
+        .collect();
+
+    swapchain_image_sets
 }
 
 /// A helper function to build an acceleration structure and wait for its completion.
@@ -564,7 +685,7 @@ unsafe fn build_acceleration_structure_common(
     geometries: AccelerationStructureGeometries,
     primitive_count: u32,
     ty: AccelerationStructureType,
-    memory_allocator: Arc<StandardMemoryAllocator>,
+    memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     device: Arc<Device>,
     queue: Arc<Queue>,
@@ -655,6 +776,35 @@ unsafe fn build_acceleration_structure_common(
         .unwrap();
 
     acceleration
+}
+
+unsafe fn build_acceleration_structure_voxels(
+    voxel_buffer: &Subbuffer<[AabbPositions]>,
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+) -> Arc<AccelerationStructure> {
+    let primitive_count = voxel_buffer.len() as u32;
+    let as_geometry_voxels_data = AccelerationStructureGeometryAabbsData {
+        data: Some(voxel_buffer.clone().into_bytes()),
+        stride: size_of::<AabbPositions>() as u32,
+        ..AccelerationStructureGeometryAabbsData::default()
+    };
+
+    let geometries = AccelerationStructureGeometries::Aabbs(vec![as_geometry_voxels_data]);
+
+    unsafe {
+        build_acceleration_structure_common(
+            geometries,
+            primitive_count,
+            AccelerationStructureType::BottomLevel,
+            memory_allocator,
+            command_buffer_allocator,
+            device,
+            queue,
+        )
+    }
 }
 
 unsafe fn build_acceleration_structure_triangles(
