@@ -1,7 +1,5 @@
 use crate::engine::context::GraphicsContext;
-use crate::engine::vulkan::{
-    Vulkan, VulkanApplicationInfo, VulkanInstanceCreateInfo, VulkanVersion,
-};
+use vulkano::Version;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -11,13 +9,13 @@ pub struct App {
     context: Option<GraphicsContext>,
     window_attributes: WindowAttributes,
     app_name: String,
-    app_version: VulkanVersion,
+    app_version: Version,
 }
 
 impl App {
     pub fn new(
         app_name: impl Into<String>,
-        app_version: impl Into<VulkanVersion>,
+        app_version: impl Into<Version>,
         window_attributes: WindowAttributes,
     ) -> Self {
         Self {
@@ -31,13 +29,12 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let app_info = VulkanApplicationInfo::default()
-            .with_app_version(&self.app_version)
-            .with_application_name(&self.app_name)
-            .with_engine_version((0, 1, 0))
-            .with_engine_name("NEVR");
-
-        self.context = GraphicsContext::new(app_info, event_loop, self.window_attributes.clone());
+        self.context = GraphicsContext::new(
+            &self.app_name,
+            &self.app_version,
+            event_loop,
+            self.window_attributes.clone(),
+        );
     }
 
     fn window_event(

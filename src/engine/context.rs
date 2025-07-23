@@ -1,14 +1,60 @@
-use crate::engine::vulkan::Vulkan;
-use crate::engine::vulkan::surface::VulkanSurface;
-use crate::vulkan::device::VulkanDevice;
-use crate::vulkan::pipeline::VulkanPipeline;
-use crate::vulkan::shader::VulkanShader;
-use crate::vulkan::swapchain::VulkanSwapchain;
-use crate::vulkan::{VulkanApplicationInfo, VulkanInstanceCreateInfo};
-use ash::vk;
-use ash::vk::{DescriptorType, MemoryAllocateFlags, ShaderStageFlags};
-use std::ffi::CStr;
-use std::ptr::null;
+use crate::buffer::VulkanBuffer;
+use foldhash::HashMap;
+use std::iter;
+use std::sync::Arc;
+use vulkano::acceleration_structure::{
+    AccelerationStructure, AccelerationStructureBuildGeometryInfo,
+    AccelerationStructureBuildRangeInfo, AccelerationStructureBuildType,
+    AccelerationStructureCreateInfo, AccelerationStructureGeometries,
+    AccelerationStructureGeometryInstancesData, AccelerationStructureGeometryInstancesDataType,
+    AccelerationStructureGeometryTrianglesData, AccelerationStructureInstance,
+    AccelerationStructureType, BuildAccelerationStructureFlags, BuildAccelerationStructureMode,
+    TransformMatrix,
+};
+use vulkano::buffer::{
+    Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer,
+};
+use vulkano::command_buffer::allocator::{
+    CommandBufferAllocator, StandardCommandBufferAllocator,
+    StandardCommandBufferAllocatorCreateInfo,
+};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferLevel, CommandBufferSubmitInfo, CommandBufferUsage,
+    CopyImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SubmitInfo,
+};
+use vulkano::descriptor_set::allocator::{
+    StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
+};
+use vulkano::descriptor_set::layout::{
+    DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
+};
+use vulkano::descriptor_set::pool::{
+    DescriptorPool, DescriptorPoolAlloc, DescriptorPoolCreateInfo, DescriptorSetAllocateInfo,
+};
+use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::device::physical::PhysicalDeviceType;
+use vulkano::device::{
+    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
+};
+use vulkano::format::Format;
+use vulkano::image::sampler::ComponentMapping;
+use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
+use vulkano::image::{
+    Image, ImageAspects, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling,
+    ImageType, ImageUsage, SampleCount,
+};
+use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::pipeline::layout::PipelineLayoutCreateInfo;
+use vulkano::pipeline::ray_tracing::{
+    RayTracingPipeline, RayTracingPipelineCreateInfo, RayTracingShaderGroupCreateInfo,
+};
+use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::shader::ShaderStages;
+use vulkano::swapchain::{Surface, Swapchain, SwapchainCreateInfo};
+use vulkano::sync::fence::{Fence, FenceCreateInfo};
+use vulkano::sync::{GpuFuture, ImageMemoryBarrier};
+use vulkano::{Version, VulkanLibrary};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
 
@@ -19,238 +65,287 @@ struct Material {
     emission: [f32; 3],
 }
 
+#[derive(BufferContents, Clone)]
+#[repr(C)]
+struct Camera {
+    camera_position: [f32; 4],
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
+    camera_forward: [f32; 4],
+
+    frame_count: u32,
+}
+
 pub struct GraphicsContext {
-    window: Window,
-    raygen_shader: VulkanShader,
-    raychit_shader: VulkanShader,
-    raymiss_shader: VulkanShader,
-    raymiss_shadow_shader: VulkanShader,
-    pipeline: VulkanPipeline,
-    swapchain: VulkanSwapchain,
-    device: VulkanDevice,
-    surface: VulkanSurface,
-    vulkan: Vulkan,
+    window: Arc<Window>,
+    library: Arc<VulkanLibrary>,
+    instance: Arc<Instance>,
+    device: Arc<Device>,
+    surface: Arc<Surface>,
+    swapchain: Arc<Swapchain>,
+    queue: Arc<Queue>,
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    pipeline: Arc<RayTracingPipeline>,
+    blas: Arc<AccelerationStructure>,
+    tlas: Arc<AccelerationStructure>,
+    camera: Camera,
+    camera_buffer: VulkanBuffer<Camera>,
 }
 
 impl GraphicsContext {
     pub fn new(
-        app_info: VulkanApplicationInfo,
+        app_name: &str,
+        app_version: &Version,
         event_loop: &ActiveEventLoop,
         attributes: WindowAttributes,
     ) -> Option<Self> {
-        let window = event_loop.create_window(attributes).ok()?;
+        let window = Arc::new(event_loop.create_window(attributes).ok()?);
+        let required_extensions = Surface::required_extensions(&event_loop).unwrap();
 
-        let vulkan = Vulkan::new(
-            VulkanInstanceCreateInfo::default()
-                .with_app_info(app_info)
-                .with_extensions(vec!["VK_KHR_surface"])
-                .enable_debug()
-                .add_required_extensions(&window),
-        )
-        .unwrap();
-
-        let surface = vulkan.create_surface(&window).ok()?;
-        let (physical_device, queue_family_index) = vulkan.find_physical_device(&surface)?;
-
-        let mut raytracing_properties = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR {
-            ..Default::default()
-        };
-
-        let properties =
-            vulkan.add_raytracing_properties(&physical_device, &mut raytracing_properties);
-        let memory_properties = vulkan.physical_device_memory_properties(&physical_device);
-
-        unsafe {
-            println!(
-                "Using device {}",
-                CStr::from_ptr(properties.properties.device_name.as_ptr())
-                    .to_str()
-                    .unwrap()
-            );
-        }
-
-        let mut address_features = vk::PhysicalDeviceBufferDeviceAddressFeatures {
-            buffer_device_address: true.into(),
-            buffer_device_address_capture_replay: false.into(),
-            buffer_device_address_multi_device: false.into(),
-            ..Default::default()
-        };
-
-        let pointer_address_features: *mut vk::PhysicalDeviceBufferDeviceAddressFeatures =
-            &mut address_features;
-
-        let mut acceleration_structure_features =
-            vk::PhysicalDeviceAccelerationStructureFeaturesKHR {
-                p_next: pointer_address_features.cast(),
-                acceleration_structure: true.into(),
-                acceleration_structure_capture_replay: false.into(),
-                acceleration_structure_indirect_build: false.into(),
-                acceleration_structure_host_commands: false.into(),
-                descriptor_binding_acceleration_structure_update_after_bind: false.into(),
+        let library = VulkanLibrary::new().unwrap();
+        let instance = Instance::new(
+            library.clone(),
+            InstanceCreateInfo {
+                application_version: *app_version,
+                application_name: Some(app_name.to_string()),
+                enabled_extensions: required_extensions,
+                flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
                 ..Default::default()
-            };
+            },
+        )
+        .unwrap();
 
-        let pointer_acceleration_structure_features:
-            *mut vk::PhysicalDeviceAccelerationStructureFeaturesKHR = &mut acceleration_structure_features;
-
-        let raytracing_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR {
-            p_next: pointer_acceleration_structure_features.cast(),
-            ray_tracing_pipeline: true.into(),
-            ray_tracing_pipeline_shader_group_handle_capture_replay: false.into(),
-            ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: false.into(),
-            ray_tracing_pipeline_trace_rays_indirect: false.into(),
-            ray_traversal_primitive_culling: false.into(),
+        let extensions = DeviceExtensions {
+            khr_ray_tracing_pipeline: true,
+            khr_acceleration_structure: true,
+            ext_descriptor_indexing: true,
+            khr_maintenance3: true,
+            khr_buffer_device_address: true,
+            khr_deferred_host_operations: true,
+            khr_swapchain: true,
             ..Default::default()
         };
 
-        let device_features = vk::PhysicalDeviceFeatures {
-            geometry_shader: true.into(),
-            ..Default::default()
-        };
+        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
-        let descriptor_pool_sizes = vec![
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                descriptor_count: 1,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: 1,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 4,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 1,
-            },
-        ];
-
-        let descriptor_set_layout_bindings = vec![
-            vk::DescriptorSetLayoutBinding {
-                binding: 0,
-                descriptor_type: DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::RAYGEN_KHR | ShaderStageFlags::CLOSEST_HIT_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-            vk::DescriptorSetLayoutBinding {
-                binding: 1,
-                descriptor_type: DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::RAYGEN_KHR | ShaderStageFlags::CLOSEST_HIT_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-            vk::DescriptorSetLayoutBinding {
-                binding: 2,
-                descriptor_type: DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-            vk::DescriptorSetLayoutBinding {
-                binding: 3,
-                descriptor_type: DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-            vk::DescriptorSetLayoutBinding {
-                binding: 4,
-                descriptor_type: DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::RAYGEN_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-        ];
-
-        let material_descriptor_set_layout_bindings = vec![
-            vk::DescriptorSetLayoutBinding {
-                binding: 0,
-                descriptor_type: DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-            vk::DescriptorSetLayoutBinding {
-                binding: 1,
-                descriptor_type: DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: ShaderStageFlags::CLOSEST_HIT_KHR,
-                p_immutable_samplers: null(),
-                _marker: Default::default(),
-            },
-        ];
-
-        let mut device = VulkanDevice::new(
-            &vulkan,
-            &physical_device,
-            queue_family_index,
-            [
-                "VK_KHR_ray_tracing_pipeline",
-                "VK_KHR_acceleration_structure",
-                "VK_EXT_descriptor_indexing",
-                "VK_KHR_maintenance3",
-                "VK_KHR_buffer_device_address",
-                "VK_KHR_deferred_host_operations",
-                "VK_KHR_swapchain",
-            ],
-            &raytracing_pipeline_features,
-            &device_features,
-            descriptor_pool_sizes,
-            descriptor_set_layout_bindings,
-            material_descriptor_set_layout_bindings,
-        )
-        .unwrap();
-
-        let memory_allocate_flags = vk::MemoryAllocateFlagsInfo {
-            flags: MemoryAllocateFlags::DEVICE_ADDRESS,
-            device_mask: 0,
-            ..Default::default()
-        };
-
-        let swapchain =
-            VulkanSwapchain::new(&vulkan, &physical_device, &mut device, &surface).unwrap();
-
-        let raygen_shader = VulkanShader::new_with_content(
-            include_bytes!("../../shaders/shader.rgen.spv"),
-            &device,
-        )
-        .unwrap();
-        let raychit_shader = VulkanShader::new_with_content(
-            include_bytes!("../../shaders/shader.rchit.spv"),
-            &device,
-        )
-        .unwrap();
-        let raymiss_shader = VulkanShader::new_with_content(
-            include_bytes!("../../shaders/shader.rmiss.spv"),
-            &device,
-        )
-        .unwrap();
-        let raymiss_shadow_shader = VulkanShader::new_with_content(
-            include_bytes!("../../shaders/shader_shadow.rmiss.spv"),
-            &device,
-        )
-        .unwrap();
-
-        let pipeline = device
-            .create_pipeline([
-                &raygen_shader,
-                &raychit_shader,
-                &raymiss_shader,
-                &raymiss_shadow_shader,
-            ])
+        let (physical_device, queue_family_index) = instance
+            .enumerate_physical_devices()
+            .unwrap()
+            .filter(|p| p.supported_extensions().contains(&extensions))
+            .filter_map(|p| {
+                p.queue_family_properties()
+                    .iter()
+                    .enumerate()
+                    .position(|(i, q)| {
+                        q.queue_flags.contains(QueueFlags::GRAPHICS)
+                            && p.surface_support(i as u32, &surface).unwrap_or(false)
+                    })
+                    .map(|q| (p, q as u32))
+            })
+            .min_by_key(|(p, _)| match p.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 0,
+                PhysicalDeviceType::IntegratedGpu => 1,
+                PhysicalDeviceType::VirtualGpu => 2,
+                PhysicalDeviceType::Cpu => 3,
+                _ => 4,
+            })
             .unwrap();
 
-        let vertices = [(10, 10, 10), (10, 11, 10), (11, 10, 10), (10, 10, 11)];
-        let indices = [(0, 1, 2), (1, 2, 3)];
+        let (device, mut queues) = Device::new(
+            physical_device.clone(),
+            DeviceCreateInfo {
+                enabled_features: DeviceFeatures {
+                    acceleration_structure: true,
+                    buffer_device_address: true,
+                    ray_tracing_pipeline: true,
+                    geometry_shader: true,
+                    ..Default::default()
+                },
+                enabled_extensions: extensions,
+                queue_create_infos: vec![QueueCreateInfo {
+                    queue_family_index,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let queue = queues.next().unwrap();
+        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+
+        let caps = physical_device
+            .surface_capabilities(&surface, Default::default())
+            .unwrap();
+
+        let dimensions = window.inner_size();
+        let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
+        let image_format = physical_device
+            .surface_formats(&surface, Default::default())
+            .unwrap()[0]
+            .0;
+
+        let (swapchain, images) = Swapchain::new(
+            device.clone(),
+            surface.clone(),
+            SwapchainCreateInfo {
+                min_image_count: caps.min_image_count + 1,
+                image_format,
+                image_extent: dimensions.into(),
+                image_usage: ImageUsage::TRANSFER_DST,
+                composite_alpha,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+            device.clone(),
+            StandardDescriptorSetAllocatorCreateInfo::default(),
+        ));
+
+        let descriptor_set_layout = DescriptorSetLayout::new(
+            device.clone(),
+            DescriptorSetLayoutCreateInfo {
+                bindings: [
+                    (
+                        0,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::AccelerationStructure,
+                            )
+                        },
+                    ),
+                    (
+                        1,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::UniformBuffer,
+                            )
+                        },
+                    ),
+                    (
+                        2,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::CLOSEST_HIT,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::StorageBuffer,
+                            )
+                        },
+                    ),
+                    (
+                        3,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::CLOSEST_HIT,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::StorageBuffer,
+                            )
+                        },
+                    ),
+                    (
+                        4,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::RAYGEN,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::StorageImage,
+                            )
+                        },
+                    ),
+                ]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let material_descriptor_set_layout = DescriptorSetLayout::new(
+            device.clone(),
+            DescriptorSetLayoutCreateInfo {
+                bindings: [
+                    (
+                        0,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::CLOSEST_HIT,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::StorageBuffer,
+                            )
+                        },
+                    ),
+                    (
+                        1,
+                        DescriptorSetLayoutBinding {
+                            stages: ShaderStages::CLOSEST_HIT,
+                            ..DescriptorSetLayoutBinding::descriptor_type(
+                                DescriptorType::StorageBuffer,
+                            )
+                        },
+                    ),
+                ]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let descriptor_set_layouts = vec![
+            descriptor_set_layout.clone(),
+            material_descriptor_set_layout.clone(),
+        ];
+
+        let pipeline_layout = PipelineLayout::new(
+            device.clone(),
+            PipelineLayoutCreateInfo {
+                set_layouts: descriptor_set_layouts,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rchit = raychit::load(device.clone()).unwrap();
+        let raygen = raygen::load(device.clone()).unwrap();
+        let rmiss = raymiss::load(device.clone()).unwrap();
+        let rmiss_shadow = raymiss_shadow::load(device.clone()).unwrap();
+
+        let pipeline = RayTracingPipeline::new(
+            device.clone(),
+            None,
+            RayTracingPipelineCreateInfo {
+                stages: vec![
+                    PipelineShaderStageCreateInfo::new(rchit.entry_point("main").unwrap()),
+                    PipelineShaderStageCreateInfo::new(raygen.entry_point("main").unwrap()),
+                    PipelineShaderStageCreateInfo::new(rmiss.entry_point("main").unwrap()),
+                    PipelineShaderStageCreateInfo::new(rmiss_shadow.entry_point("main").unwrap()),
+                ]
+                .into(),
+                groups: vec![
+                    RayTracingShaderGroupCreateInfo::TrianglesHit {
+                        closest_hit_shader: Some(0),
+                        any_hit_shader: None,
+                    },
+                    RayTracingShaderGroupCreateInfo::General { general_shader: 1 },
+                    RayTracingShaderGroupCreateInfo::General { general_shader: 2 },
+                    RayTracingShaderGroupCreateInfo::General { general_shader: 3 },
+                ]
+                .into(),
+                max_pipeline_ray_recursion_depth: 1,
+                ..RayTracingPipelineCreateInfo::layout(pipeline_layout)
+            },
+        )
+        .unwrap();
+
+        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+            device.clone(),
+            StandardCommandBufferAllocatorCreateInfo {
+                primary_buffer_count: 16,
+                ..Default::default()
+            },
+        ));
+
+        let vertices = [[10, 10, 10], [10, 11, 10], [11, 10, 10], [10, 11, 10]];
+        let indices = [0, 1, 2, 1, 2, 3];
         let primitive_count = 2;
         let materials = [
             Material {
@@ -267,17 +362,373 @@ impl GraphicsContext {
             },
         ];
 
+        let vertex_buffer = VulkanBuffer::new(
+            memory_allocator.clone(),
+            vertices,
+            BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                | BufferUsage::STORAGE_BUFFER,
+        );
+        let index_buffer = VulkanBuffer::new(
+            memory_allocator.clone(),
+            indices,
+            BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                | BufferUsage::STORAGE_BUFFER,
+        );
+
+        let blas = unsafe {
+            build_acceleration_structure_triangles(
+                primitive_count,
+                vertex_buffer.device_buffer.clone(),
+                index_buffer.device_buffer.clone(),
+                memory_allocator.clone(),
+                command_buffer_allocator.clone(),
+                device.clone(),
+                queue.clone(),
+            )
+        };
+
+        let tlas = unsafe {
+            build_top_level_acceleration_structure(
+                vec![AccelerationStructureInstance {
+                    acceleration_structure_reference: blas.device_address().into(),
+                    transform: TransformMatrix::from([
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                    ]),
+                    ..Default::default()
+                }],
+                memory_allocator.clone(),
+                command_buffer_allocator.clone(),
+                device.clone(),
+                queue.clone(),
+            )
+        };
+
+        let camera = Camera {
+            camera_position: [0.0, 0.0, 0.0, 1.0],
+            camera_right: [1.0, 0.0, 0.0, 1.0],
+            camera_up: [0.0, 1.0, 0.0, 1.0],
+            camera_forward: [0.0, 0.0, 1.0, 1.0],
+            frame_count: 0,
+        };
+
+        let camera_buffer = VulkanBuffer::new_with_data(
+            memory_allocator.clone(),
+            camera.clone(),
+            BufferUsage::UNIFORM_BUFFER,
+        );
+
+        let image = Image::new(
+            memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: image_format,
+                extent: [dimensions.width, dimensions.height, 1],
+                mip_levels: 1,
+                array_layers: 1,
+                samples: SampleCount::Sample1,
+                tiling: ImageTiling::Optimal,
+                usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let image_view = ImageView::new(
+            image.clone(),
+            ImageViewCreateInfo {
+                view_type: ImageViewType::Dim2d,
+                format: image_format,
+                component_mapping: ComponentMapping::identity(),
+                subresource_range: ImageSubresourceRange {
+                    aspects: ImageAspects::COLOR,
+                    mip_levels: 0..1,
+                    array_layers: 0..1,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let image_memory_barrier = ImageMemoryBarrier {
+            old_layout: ImageLayout::Undefined,
+            new_layout: ImageLayout::General,
+            subresource_range: ImageSubresourceRange {
+                aspects: ImageAspects::COLOR,
+                mip_levels: 0..1,
+                array_layers: 0..1,
+            },
+            ..ImageMemoryBarrier::image(image.clone())
+        };
+
+        let image_fence = Fence::new(device.clone(), FenceCreateInfo::default()).unwrap();
+
+        let builder = AutoCommandBufferBuilder::primary(
+            command_buffer_allocator.clone(),
+            queue_family_index,
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        let fence = builder
+            .build()
+            .unwrap()
+            .execute(queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap();
+
+        fence.wait(None).unwrap();
+
+        let write_descriptor_sets = vec![
+            WriteDescriptorSet::acceleration_structure(0, tlas.clone()),
+            WriteDescriptorSet::buffer(1, camera_buffer.device_buffer.clone()),
+            WriteDescriptorSet::buffer(2, index_buffer.device_buffer.clone()),
+            WriteDescriptorSet::buffer(3, vertex_buffer.device_buffer.clone()),
+            WriteDescriptorSet::image_view(4, image_view.clone()),
+        ];
+
+        let descriptor_set = DescriptorSet::new(
+            descriptor_set_allocator.clone(),
+            descriptor_set_layout,
+            write_descriptor_sets,
+            None,
+        )
+        .unwrap();
+
         Some(Self {
-            vulkan,
             window,
-            surface,
+            library,
+            instance,
             device,
+            surface,
             swapchain,
+            queue,
+            memory_allocator,
+            command_buffer_allocator,
             pipeline,
-            raygen_shader,
-            raychit_shader,
-            raymiss_shader,
-            raymiss_shadow_shader,
+            blas,
+            tlas,
+            camera,
+            camera_buffer,
         })
+    }
+}
+
+mod raygen {
+    vulkano_shaders::shader! {
+        ty: "raygen",
+        path: "./shaders/shader.rgen",
+        vulkan_version: "1.3"
+    }
+}
+
+mod raychit {
+    vulkano_shaders::shader! {
+        ty: "closesthit",
+        path: "./shaders/shader.rchit",
+        vulkan_version: "1.3"
+    }
+}
+
+mod raymiss {
+    vulkano_shaders::shader! {
+        ty: "miss",
+        path: "./shaders/shader.rmiss",
+        vulkan_version: "1.3"
+    }
+}
+
+mod raymiss_shadow {
+    vulkano_shaders::shader! {
+        ty: "miss",
+        path: "./shaders/shader_shadow.rmiss",
+        vulkan_version: "1.3"
+    }
+}
+
+/// A helper function to build an acceleration structure and wait for its completion.
+///
+/// # Safety
+///
+/// - If you are referencing a bottom-level acceleration structure in a top-level acceleration
+///   structure, you must ensure that the bottom-level acceleration structure is kept alive.
+unsafe fn build_acceleration_structure_common(
+    geometries: AccelerationStructureGeometries,
+    primitive_count: u32,
+    ty: AccelerationStructureType,
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+) -> Arc<AccelerationStructure> {
+    let mut as_build_geometry_info = AccelerationStructureBuildGeometryInfo {
+        mode: BuildAccelerationStructureMode::Build,
+        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
+        ..AccelerationStructureBuildGeometryInfo::new(geometries)
+    };
+
+    let as_build_sizes_info = device
+        .acceleration_structure_build_sizes(
+            AccelerationStructureBuildType::Device,
+            &as_build_geometry_info,
+            &[primitive_count],
+        )
+        .unwrap();
+
+    // We create a new scratch buffer for each acceleration structure for simplicity. You may want
+    // to reuse scratch buffers if you need to build many acceleration structures.
+    let scratch_buffer = Buffer::new_slice::<u8>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::SHADER_DEVICE_ADDRESS | BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo::default(),
+        as_build_sizes_info.build_scratch_size,
+    )
+    .unwrap();
+
+    let acceleration = unsafe {
+        AccelerationStructure::new(
+            device,
+            AccelerationStructureCreateInfo {
+                ty,
+                ..AccelerationStructureCreateInfo::new(
+                    Buffer::new_slice::<u8>(
+                        memory_allocator,
+                        BufferCreateInfo {
+                            usage: BufferUsage::ACCELERATION_STRUCTURE_STORAGE
+                                | BufferUsage::SHADER_DEVICE_ADDRESS,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo::default(),
+                        as_build_sizes_info.acceleration_structure_size,
+                    )
+                    .unwrap(),
+                )
+            },
+        )
+    }
+    .unwrap();
+
+    as_build_geometry_info.dst_acceleration_structure = Some(acceleration.clone());
+    as_build_geometry_info.scratch_data = Some(scratch_buffer);
+
+    let as_build_range_info = AccelerationStructureBuildRangeInfo {
+        primitive_count,
+        ..Default::default()
+    };
+
+    // For simplicity, we build a single command buffer that builds the acceleration structure,
+    // then waits for its execution to complete.
+    let mut builder = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator.clone(),
+        queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    unsafe {
+        builder.build_acceleration_structure(
+            as_build_geometry_info,
+            iter::once(as_build_range_info).collect(),
+        )
+    }
+    .unwrap();
+
+    builder
+        .build()
+        .unwrap()
+        .execute(queue.clone())
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    acceleration
+}
+
+unsafe fn build_acceleration_structure_triangles(
+    primitive_count: u32,
+    vertex_buffer: Subbuffer<[[i32; 3]]>,
+    index_buffer: Subbuffer<[u32]>,
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+) -> Arc<AccelerationStructure> {
+    let as_geometry_triangles_data = AccelerationStructureGeometryTrianglesData {
+        max_vertex: vertex_buffer.len() as _,
+        vertex_data: Some(vertex_buffer.clone().into_bytes()),
+        vertex_stride: size_of::<[i32; 3]>() as _,
+        index_data: Some(IndexBuffer::U32(index_buffer)),
+        ..AccelerationStructureGeometryTrianglesData::new(Format::R32G32B32_SFLOAT)
+    };
+
+    let geometries = AccelerationStructureGeometries::Triangles(vec![as_geometry_triangles_data]);
+
+    unsafe {
+        build_acceleration_structure_common(
+            geometries,
+            primitive_count,
+            AccelerationStructureType::BottomLevel,
+            memory_allocator,
+            command_buffer_allocator,
+            device,
+            queue,
+        )
+    }
+}
+
+unsafe fn build_top_level_acceleration_structure(
+    as_instances: Vec<AccelerationStructureInstance>,
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+) -> Arc<AccelerationStructure> {
+    let primitive_count = as_instances.len() as u32;
+
+    let instance_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        as_instances,
+    )
+    .unwrap();
+
+    let as_geometry_instances_data = AccelerationStructureGeometryInstancesData::new(
+        AccelerationStructureGeometryInstancesDataType::Values(Some(instance_buffer)),
+    );
+
+    let geometries = AccelerationStructureGeometries::Instances(as_geometry_instances_data);
+
+    unsafe {
+        build_acceleration_structure_common(
+            geometries,
+            primitive_count,
+            AccelerationStructureType::TopLevel,
+            memory_allocator,
+            command_buffer_allocator,
+            device,
+            queue,
+        )
     }
 }
