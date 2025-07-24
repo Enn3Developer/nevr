@@ -9,8 +9,8 @@
 #include "random.glsl"
 #include "raycommon.glsl"
 
-const int NBSAMPLES = 5;
-const int BOUNCES = 4;
+const int NBSAMPLES = 20;
+const int BOUNCES = 10;
 
 layout (location = 0) rayPayloadEXT RayPayload Ray;
 layout (set = 0, binding = 0) uniform accelerationStructureEXT top_level_as;
