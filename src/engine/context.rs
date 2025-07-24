@@ -1,4 +1,3 @@
-use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use std::iter;
 use std::ops::Deref;
@@ -12,7 +11,9 @@ use vulkano::acceleration_structure::{
     AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
     BuildAccelerationStructureMode,
 };
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer};
+use vulkano::buffer::{
+    Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer,
+};
 use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
@@ -60,36 +61,32 @@ struct Material {
     emission: [f32; 3],
 }
 
-#[derive(Clone, Copy, Zeroable, Pod)]
-#[repr(C)]
-pub struct Voxel {
-    center: [f32; 3],
-    _padding1: u32,
-    color: [f32; 3],
-    _padding2: u32,
-}
-
-impl From<Voxel> for AabbPositions {
-    fn from(voxel: Voxel) -> Self {
-        AabbPositions {
-            min: (Vec3::from_array(voxel.center) - Vec3::splat(1.0 / 32.0)).into(),
-            max: (Vec3::from_array(voxel.center) + Vec3::splat(1.0 / 32.0)).into(),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Camera {
     pub projection: Mat4,
     pub view: Mat4,
+    pub aperture: f32,
+    pub focus_distance: f32,
 }
 
-impl<C: Deref<Target = Camera>> From<C> for raygen::Camera {
+#[derive(Debug, BufferContents, Copy, Clone)]
+#[repr(C)]
+pub struct RayCamera {
+    pub(crate) view_proj: [[f32; 4]; 4],
+    pub(crate) view_inverse: [[f32; 4]; 4],
+    pub(crate) proj_inverse: [[f32; 4]; 4],
+    pub(crate) aperture: f32,
+    pub(crate) focus_distance: f32,
+}
+
+impl<C: Deref<Target = Camera>> From<C> for RayCamera {
     fn from(camera: C) -> Self {
-        raygen::Camera {
+        RayCamera {
             view_proj: (camera.projection * camera.view).to_cols_array_2d(),
             view_inverse: camera.view.inverse().to_cols_array_2d(),
             proj_inverse: camera.projection.inverse().to_cols_array_2d(),
+            aperture: camera.aperture,
+            focus_distance: camera.focus_distance,
         }
     }
 }
@@ -103,19 +100,12 @@ pub struct GraphicsContext {
     pub(crate) swapchain: Arc<Swapchain>,
     pub(crate) previous_frame: Option<Box<dyn GpuFuture>>,
     pub(crate) recreate_swapchain: bool,
-    memory_allocator: Arc<dyn MemoryAllocator>,
-    descriptor_set: Arc<DescriptorSet>,
-    intersect_descriptor_set: Arc<DescriptorSet>,
+    pub(crate) memory_allocator: Arc<dyn MemoryAllocator>,
     swapchain_image_sets: Vec<(Arc<ImageView>, Arc<DescriptorSet>)>,
-    descriptor_set_allocator: Arc<dyn DescriptorSetAllocator>,
-    pipeline_layout: Arc<PipelineLayout>,
+    pub(crate) descriptor_set_allocator: Arc<dyn DescriptorSetAllocator>,
+    pub(crate) pipeline_layout: Arc<PipelineLayout>,
     shader_binding_table: ShaderBindingTable,
     pipeline: Arc<RayTracingPipeline>,
-    blas: Arc<AccelerationStructure>,
-    tlas: Arc<AccelerationStructure>,
-    camera: Camera,
-    camera_buffer: Subbuffer<raygen::Camera>,
-    raygen_camera: Arc<raygen::Camera>,
     pub(crate) builder: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
     pub(crate) image_index: Option<u32>,
 }
@@ -275,7 +265,7 @@ impl GraphicsContext {
                                 (
                                     0,
                                     DescriptorSetLayoutBinding {
-                                        stages: ShaderStages::RAYGEN,
+                                        stages: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
                                         ..DescriptorSetLayoutBinding::descriptor_type(
                                             DescriptorType::AccelerationStructure,
                                         )
@@ -316,15 +306,27 @@ impl GraphicsContext {
                     DescriptorSetLayout::new(
                         device.clone(),
                         DescriptorSetLayoutCreateInfo {
-                            bindings: [(
-                                0,
-                                DescriptorSetLayoutBinding {
-                                    stages: ShaderStages::INTERSECTION | ShaderStages::CLOSEST_HIT,
-                                    ..DescriptorSetLayoutBinding::descriptor_type(
-                                        DescriptorType::StorageBuffer,
-                                    )
-                                },
-                            )]
+                            bindings: [
+                                (
+                                    0,
+                                    DescriptorSetLayoutBinding {
+                                        stages: ShaderStages::INTERSECTION
+                                            | ShaderStages::CLOSEST_HIT,
+                                        ..DescriptorSetLayoutBinding::descriptor_type(
+                                            DescriptorType::StorageBuffer,
+                                        )
+                                    },
+                                ),
+                                (
+                                    1,
+                                    DescriptorSetLayoutBinding {
+                                        stages: ShaderStages::CLOSEST_HIT,
+                                        ..DescriptorSetLayoutBinding::descriptor_type(
+                                            DescriptorType::StorageBuffer,
+                                        )
+                                    },
+                                ),
+                            ]
                             .into(),
                             ..Default::default()
                         },
@@ -401,134 +403,12 @@ impl GraphicsContext {
                 RayTracingPipelineCreateInfo {
                     stages: stages.to_vec().into(),
                     groups: groups.to_vec().into(),
-                    max_pipeline_ray_recursion_depth: 1,
+                    max_pipeline_ray_recursion_depth: 10,
                     ..RayTracingPipelineCreateInfo::layout(pipeline_layout.clone())
                 },
             )
             .ok()?
         };
-
-        let voxels = [
-            Voxel {
-                center: [-2.0, 0.0, -1.2],
-                color: [0.0, 0.0, 1.0],
-                _padding1: 0,
-                _padding2: 0,
-            },
-            Voxel {
-                center: [-2.0, 0.0, -1.0],
-                color: [1.0, 0.0, 0.0],
-                _padding1: 0,
-                _padding2: 0,
-            },
-        ];
-
-        let voxel_data = Buffer::from_data(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            voxels.clone(),
-        )
-        .ok()?;
-
-        let voxel_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER
-                    | BufferUsage::SHADER_DEVICE_ADDRESS
-                    | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            voxels.clone().into_iter().map(|v| AabbPositions::from(v)),
-        )
-        .ok()?;
-
-        // Build the bottom-level acceleration structure and then the top-level acceleration
-        // structure. Acceleration structures are used to accelerate ray tracing. The bottom-level
-        // acceleration structure contains the geometry data. The top-level acceleration structure
-        // contains the instances of the bottom-level acceleration structures. In our shader, we
-        // will trace rays against the top-level acceleration structure.
-        let blas = unsafe {
-            build_acceleration_structure_voxels(
-                &voxel_buffer,
-                memory_allocator.clone(),
-                command_buffer_allocator.clone(),
-                device.clone(),
-                queue.clone(),
-            )
-        };
-        let tlas = unsafe {
-            build_top_level_acceleration_structure(
-                vec![AccelerationStructureInstance {
-                    acceleration_structure_reference: blas.device_address().into(),
-                    ..Default::default()
-                }],
-                memory_allocator.clone(),
-                command_buffer_allocator.clone(),
-                device.clone(),
-                queue.clone(),
-            )
-        };
-
-        let proj = Mat4::perspective_rh(90.0_f32.to_radians(), 16.0 / 9.0, 0.001, 1000.0);
-        let view = Mat4::look_at_rh(
-            Vec3::new(-2.0, 2.0, 1.0),
-            Vec3::new(0.0, 0.0, -1.0),
-            Vec3::new(0.0, -1.0, 0.0),
-        );
-
-        let camera = Camera {
-            projection: proj,
-            view,
-        };
-
-        let raygen_camera = Arc::new(raygen::Camera::from(&camera));
-
-        let camera_buffer = Buffer::from_data(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER | BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            *raygen_camera,
-        )
-        .ok()?;
-
-        let descriptor_set = DescriptorSet::new(
-            descriptor_set_allocator.clone(),
-            pipeline_layout.set_layouts()[0].clone(),
-            [
-                WriteDescriptorSet::acceleration_structure(0, tlas.clone()),
-                WriteDescriptorSet::buffer(1, camera_buffer.clone()),
-            ],
-            [],
-        )
-        .ok()?;
-
-        let intersect_descriptor_set = DescriptorSet::new(
-            descriptor_set_allocator.clone(),
-            pipeline_layout.set_layouts()[2].clone(),
-            [WriteDescriptorSet::buffer(0, voxel_data.clone())],
-            [],
-        )
-        .ok()?;
 
         let swapchain_image_sets = window_size_dependent_setup(
             images,
@@ -550,18 +430,11 @@ impl GraphicsContext {
             swapchain,
             previous_frame,
             memory_allocator,
-            descriptor_set,
-            intersect_descriptor_set,
             swapchain_image_sets,
             descriptor_set_allocator,
             pipeline_layout,
             shader_binding_table,
             pipeline,
-            blas,
-            tlas,
-            camera,
-            camera_buffer,
-            raygen_camera,
             recreate_swapchain: false,
             builder: None,
             image_index: None,
@@ -576,12 +449,12 @@ impl GraphicsContext {
         );
     }
 
-    pub(crate) fn draw(&mut self) {
+    pub(crate) fn draw(
+        &mut self,
+        descriptor_set: Arc<DescriptorSet>,
+        intersect_descriptor_set: Arc<DescriptorSet>,
+    ) {
         let builder = self.builder.as_mut().unwrap();
-
-        builder
-            .update_buffer(self.camera_buffer.clone(), self.raygen_camera.clone())
-            .unwrap();
 
         builder
             .bind_descriptor_sets(
@@ -589,11 +462,11 @@ impl GraphicsContext {
                 self.pipeline_layout.clone(),
                 0,
                 vec![
-                    self.descriptor_set.clone(),
+                    descriptor_set,
                     self.swapchain_image_sets[self.image_index.unwrap() as usize]
                         .1
                         .clone(),
-                    self.intersect_descriptor_set.clone(),
+                    intersect_descriptor_set,
                 ],
             )
             .unwrap()
@@ -778,7 +651,7 @@ unsafe fn build_acceleration_structure_common(
     acceleration
 }
 
-unsafe fn build_acceleration_structure_voxels(
+pub(crate) unsafe fn build_acceleration_structure_voxels(
     voxel_buffer: &Subbuffer<[AabbPositions]>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
@@ -807,7 +680,7 @@ unsafe fn build_acceleration_structure_voxels(
     }
 }
 
-unsafe fn build_acceleration_structure_triangles(
+pub(crate) unsafe fn build_acceleration_structure_triangles(
     primitive_count: u32,
     vertex_buffer: Subbuffer<[[i32; 3]]>,
     index_buffer: Subbuffer<[u32]>,
@@ -839,9 +712,9 @@ unsafe fn build_acceleration_structure_triangles(
     }
 }
 
-unsafe fn build_top_level_acceleration_structure(
+pub(crate) unsafe fn build_top_level_acceleration_structure(
     as_instances: Vec<AccelerationStructureInstance>,
-    memory_allocator: Arc<StandardMemoryAllocator>,
+    memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     device: Arc<Device>,
     queue: Arc<Queue>,

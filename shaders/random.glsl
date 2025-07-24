@@ -1,12 +1,17 @@
-// Generate a random unsigned int from two unsigned int values, using 16 pairs
-// of rounds of the Tiny Encryption Algorithm. See Zafar, Olano, and Curtis,
-// "GPU Random Numbers via the Tiny Encryption Algorithm"
-uint tea(uint val0, uint val1)
-{
-    uint v0 = val0;
-    uint v1 = val1;
-    uint s0 = 0;
+#ifndef RANDOM
+#define RANDOM
 
+#extension GL_EXT_control_flow_attributes: require
+
+// Generates a seed for a random number generator from 2 inputs plus a backoff
+// https://github.com/nvpro-samples/optix_prime_baking/blob/332a886f1ac46c0b3eea9e89a59593470c755a0e/random.h
+// https://github.com/nvpro-samples/vk_raytracing_tutorial_KHR/tree/master/ray_tracing_jitter_cam
+// https://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm
+uint InitRandomSeed(uint val0, uint val1)
+{
+    uint v0 = val0, v1 = val1, s0 = 0;
+
+    [[unroll]]
     for (uint n = 0; n < 16; n++)
     {
         s0 += 0x9e3779b9;
@@ -17,18 +22,45 @@ uint tea(uint val0, uint val1)
     return v0;
 }
 
-// Generate a random unsigned int in [0, 2^24) given the previous RNG state
-// using the Numerical Recipes linear congruential generator
-uint lcg(inout uint prev)
+uint RandomInt(inout uint seed)
 {
-    uint LCG_A = 1664525u;
-    uint LCG_C = 1013904223u;
-    prev = (LCG_A * prev + LCG_C);
-    return prev & 0x00FFFFFF;
+    // LCG values from Numerical Recipes
+    return (seed = 1664525 * seed + 1013904223);
 }
 
-// Generate a random float in [0, 1) given the previous RNG state
-float rnd(inout uint prev)
+float RandomFloat(inout uint seed)
 {
-    return (float(lcg(prev)) / float(0x01000000));
+    //// Float version using bitmask from Numerical Recipes
+    //const uint one = 0x3f800000;
+    //const uint msk = 0x007fffff;
+    //return uintBitsToFloat(one | (msk & (RandomInt(seed) >> 9))) - 1;
+
+    // Faster version from NVIDIA examples; quality good enough for our use case.
+    return (float(RandomInt(seed) & 0x00FFFFFF) / float(0x01000000));
 }
+
+vec2 RandomInUnitDisk(inout uint seed)
+{
+    for (; ;)
+    {
+        const vec2 p = 2 * vec2(RandomFloat(seed), RandomFloat(seed)) - 1;
+        if (dot(p, p) < 1)
+        {
+            return p;
+        }
+    }
+}
+
+vec3 RandomInUnitSphere(inout uint seed)
+{
+    for (; ;)
+    {
+        const vec3 p = 2 * vec3(RandomFloat(seed), RandomFloat(seed), RandomFloat(seed)) - 1;
+        if (dot(p, p) < 1)
+        {
+            return p;
+        }
+    }
+}
+
+#endif

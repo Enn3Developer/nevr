@@ -1,6 +1,5 @@
 #version 460
 #extension GL_EXT_ray_tracing: require
-#extension GL_EXT_ray_tracing: require
 #extension GL_EXT_nonuniform_qualifier: enable
 #extension GL_EXT_scalar_block_layout: enable
 #extension GL_GOOGLE_include_directive: enable
@@ -10,8 +9,9 @@
 hitAttributeEXT vec2 attribs;
 
 struct Voxel {
-    vec3 center;
-    vec3 color;
+    vec3 minimum;
+    vec3 maximum;
+    uint material_id;
 };
 
 struct Ray
@@ -41,10 +41,9 @@ void main() {
     ray.origin = gl_WorldRayOriginEXT;
     ray.direction = gl_WorldRayDirectionEXT;
 
-    vec3 aabbMin = allVoxels[gl_PrimitiveID].center - 0.1;
-    vec3 aabbMax = allVoxels[gl_PrimitiveID].center + 0.1;
+    Voxel voxel = allVoxels[gl_PrimitiveID];
 
-    vec2 t = intersectAABB(ray, aabbMin, aabbMax);
+    vec2 t = intersectAABB(ray, voxel.minimum, voxel.maximum);
 
     if (t.x <= t.y) {
         attribs = t;

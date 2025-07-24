@@ -1,6 +1,8 @@
 use crate::engine::context::GraphicsContext;
 use crate::scene::{Scene, SceneManager};
+use crate::voxel::VoxelLibrary;
 use std::sync::Arc;
+use std::time::Instant;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo, acquire_next_image};
 use vulkano::sync::GpuFuture;
@@ -24,14 +26,15 @@ impl App {
         app_name: impl Into<String>,
         app_version: impl Into<Version>,
         window_attributes: WindowAttributes,
-        main_scene: Arc<dyn Scene>,
+        main_scene: Box<dyn Scene>,
+        voxel_library: VoxelLibrary,
     ) -> Self {
         Self {
             window_attributes,
             app_name: app_name.into(),
             app_version: app_version.into(),
             context: None,
-            scene_manager: SceneManager::new(main_scene),
+            scene_manager: SceneManager::new(main_scene, voxel_library),
         }
     }
 }
@@ -72,6 +75,8 @@ impl ApplicationHandler for App {
                 ..
             } => self.scene_manager.input(key_code, state),
             WindowEvent::RedrawRequested => {
+                let start = Instant::now();
+
                 let window_size = ctx.window.inner_size();
 
                 if window_size.width == 0 || window_size.height == 0 {
@@ -116,7 +121,7 @@ impl ApplicationHandler for App {
                 let builder = AutoCommandBufferBuilder::primary(
                     ctx.command_buffer_allocator.clone(),
                     ctx.queue.queue_family_index(),
-                    CommandBufferUsage::MultipleSubmit,
+                    CommandBufferUsage::OneTimeSubmit,
                 )
                 .unwrap();
 
@@ -156,6 +161,12 @@ impl ApplicationHandler for App {
                         Some(sync::now(ctx.device.clone()).boxed())
                     }
                 };
+
+                let end = Instant::now();
+                println!(
+                    "render time: {:2}ms",
+                    (end - start).as_micros() as f32 / 1000.0
+                );
 
                 ctx.window.request_redraw();
             }
