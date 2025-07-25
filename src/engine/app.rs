@@ -78,6 +78,7 @@ impl ApplicationHandler for App {
             } => self.scene_manager.input(key_code, state, self.last_delta),
             WindowEvent::RedrawRequested => {
                 let start = Instant::now();
+                self.scene_manager.update();
 
                 let window_size = ctx.window.inner_size();
 

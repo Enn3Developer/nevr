@@ -69,6 +69,7 @@ impl SceneManager {
             focus_distance: 3.4,
             projection: proj,
             view,
+            frame: 0,
         };
 
         Self {
@@ -89,6 +90,7 @@ impl SceneManager {
             self.update_camera = false;
 
             let ray_camera = Arc::new(RayCamera::from(&self.camera));
+            println!("frames: {}", ray_camera.frame);
 
             self.camera_buffer = Some(
                 Buffer::from_data(
@@ -267,8 +269,14 @@ impl SceneManager {
                     translation -= rotation * (rotation * movement);
                     self.camera.view =
                         Mat4::from_scale_rotation_translation(scale, rotation, translation);
+                    self.camera.frame = 0;
                 }
             }
         }
+    }
+
+    pub fn update(&mut self) {
+        self.camera.frame += 1;
+        self.update_camera = true;
     }
 }

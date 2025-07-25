@@ -54,19 +54,13 @@ use vulkano::{Version, VulkanLibrary, sync};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
 
-struct Material {
-    ambient: [f32; 3],
-    diffuse: [f32; 3],
-    specular: [f32; 3],
-    emission: [f32; 3],
-}
-
 #[derive(Clone, Debug)]
 pub struct Camera {
     pub projection: Mat4,
     pub view: Mat4,
     pub aperture: f32,
     pub focus_distance: f32,
+    pub(crate) frame: u32,
 }
 
 #[derive(Debug, BufferContents, Copy, Clone)]
@@ -77,6 +71,7 @@ pub struct RayCamera {
     pub(crate) proj_inverse: [[f32; 4]; 4],
     pub(crate) aperture: f32,
     pub(crate) focus_distance: f32,
+    pub(crate) frame: u32,
 }
 
 impl<C: Deref<Target = Camera>> From<C> for RayCamera {
@@ -87,6 +82,7 @@ impl<C: Deref<Target = Camera>> From<C> for RayCamera {
             proj_inverse: camera.projection.inverse().to_cols_array_2d(),
             aperture: camera.aperture,
             focus_distance: camera.focus_distance,
+            frame: camera.frame,
         }
     }
 }

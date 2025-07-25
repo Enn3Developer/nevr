@@ -9,7 +9,7 @@
 #include "random.glsl"
 #include "raycommon.glsl"
 
-const int NBSAMPLES = 20;
+const int NBSAMPLES = 10;
 const int BOUNCES = 10;
 
 layout (location = 0) rayPayloadEXT RayPayload Ray;
@@ -20,12 +20,13 @@ layout (set = 0, binding = 1) uniform Camera {
     mat4 proj_inverse; // Camera inverse projection matrix
     float aperture;
     float focusDistance;
+    uint frame;
 } camera;
 layout (set = 1, binding = 0, rgba32f) uniform image2D image;
 
 void main() {
-    Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), NBSAMPLES);
-    uint pixelRandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), NBSAMPLES);
+    Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), camera.frame * NBSAMPLES * BOUNCES);
+    uint pixelRandomSeed = InitRandomSeed(camera.frame * NBSAMPLES * BOUNCES, camera.frame * NBSAMPLES);
 
     vec3 pixelColor = vec3(0);
 
@@ -59,9 +60,9 @@ void main() {
                 top_level_as,
                 ray_flags,
                 0xFF,
-                0,
-                0,
-                0,
+                0, // sbtOffset
+                0, // sbtStride
+                0, // missIndex
                 origin.xyz,
                 t_min,
                 direction.xyz,
@@ -90,5 +91,11 @@ void main() {
     pixelColor = pixelColor / NBSAMPLES;
     pixelColor = sqrt(pixelColor);
 
-    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(pixelColor, 1.0));
+    if (camera.frame > 2) {
+        vec3 old_color = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
+        vec3 color = (old_color * camera.frame + pixelColor) / (camera.frame + 1);
+        imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(color, 1.0));
+    } else {
+        imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(pixelColor, 1.0));
+    }
 }
