@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use std::iter;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -60,16 +60,27 @@ pub struct Camera {
     pub view: Mat4,
     pub aperture: f32,
     pub focus_distance: f32,
+    pub samples: u32,
+    pub bounces: u32,
     pub(crate) frame: u32,
 }
 
 impl Camera {
-    pub fn new(projection: Mat4, view: Mat4, aperture: f32, focus_distance: f32) -> Self {
+    pub fn new(
+        projection: Mat4,
+        view: Mat4,
+        aperture: f32,
+        focus_distance: f32,
+        samples: u32,
+        bounces: u32,
+    ) -> Self {
         Self {
             projection,
             view,
             aperture,
             focus_distance,
+            samples,
+            bounces,
             frame: 0,
         }
     }
@@ -83,6 +94,8 @@ pub struct RayCamera {
     pub(crate) proj_inverse: [[f32; 4]; 4],
     pub(crate) aperture: f32,
     pub(crate) focus_distance: f32,
+    pub(crate) samples: u32,
+    pub(crate) bounces: u32,
     pub(crate) frame: u32,
 }
 
@@ -94,6 +107,8 @@ impl<C: Deref<Target = Camera>> From<C> for RayCamera {
             proj_inverse: camera.projection.inverse().to_cols_array_2d(),
             aperture: camera.aperture,
             focus_distance: camera.focus_distance,
+            samples: camera.samples,
+            bounces: camera.bounces,
             frame: camera.frame,
         }
     }

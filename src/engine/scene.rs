@@ -33,6 +33,8 @@ enum RunCommand {
     LightDirection(Vec4),
     ChangeScene(Box<dyn Scene>),
     GrabCursor(bool),
+    Samples(u32),
+    Bounces(u32),
 }
 
 pub struct RunContext<'a> {
@@ -99,6 +101,14 @@ impl<'a> RunContext<'a> {
     pub fn grab_cursor(&self, grab_cursor: bool) {
         self.add_command(RunCommand::GrabCursor(grab_cursor));
     }
+
+    pub fn set_samples(&self, samples: u32) {
+        self.add_command(RunCommand::Samples(samples));
+    }
+
+    pub fn set_bounces(&self, bounces: u32) {
+        self.add_command(RunCommand::Bounces(bounces));
+    }
 }
 
 pub struct InputState {
@@ -159,6 +169,8 @@ impl SceneManager {
             projection: proj,
             view,
             frame: 0,
+            samples: 20,
+            bounces: 10,
         };
         let light = Light {
             ambient_light: Vec4::new(0.3, 0.3, 0.3, 0.0).to_array(),
@@ -504,6 +516,16 @@ impl SceneManager {
                             CursorGrabMode::None
                         })
                         .unwrap();
+                }
+                RunCommand::Samples(samples) => {
+                    self.camera.samples = samples;
+                    self.camera.frame = 0;
+                    self.update_camera = true;
+                }
+                RunCommand::Bounces(bounces) => {
+                    self.camera.bounces = bounces;
+                    self.camera.frame = 0;
+                    self.update_camera = true;
                 }
             }
         }

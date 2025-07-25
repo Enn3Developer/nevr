@@ -9,9 +9,6 @@
 #include "random.glsl"
 #include "raycommon.glsl"
 
-const int NBSAMPLES = 20;
-const int BOUNCES = 10;
-
 layout (location = 0) rayPayloadEXT RayPayload Ray;
 layout (set = 0, binding = 0) uniform accelerationStructureEXT top_level_as;
 layout (set = 0, binding = 1) uniform Camera {
@@ -20,6 +17,8 @@ layout (set = 0, binding = 1) uniform Camera {
     mat4 proj_inverse; // Camera inverse projection matrix
     float aperture;
     float focusDistance;
+    uint samples;
+    uint bounces;
     uint frame;
 } camera;
 layout (set = 1, binding = 0, rgba32f) uniform image2D image;
@@ -29,12 +28,12 @@ layout (set = 3, binding = 1) uniform Light {
 } light;
 
 void main() {
-    Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), camera.frame * NBSAMPLES * BOUNCES);
-    uint pixelRandomSeed = InitRandomSeed(camera.frame * NBSAMPLES * BOUNCES, camera.frame * NBSAMPLES);
+    Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), camera.frame * camera.samples * camera.bounces);
+    uint pixelRandomSeed = InitRandomSeed(camera.frame * camera.samples * camera.bounces, camera.frame * camera.samples);
 
     vec3 pixelColor = vec3(0);
 
-    for (int i = 0; i < NBSAMPLES; i++) {
+    for (int i = 0; i < camera.samples; i++) {
         float r1 = RandomFloat(pixelRandomSeed);
         float r2 = RandomFloat(pixelRandomSeed);
 
@@ -54,8 +53,8 @@ void main() {
         float t_min = 0.01;
         float t_max = 10000.0;
 
-        for (int b = 0; b <= BOUNCES; b++) {
-            if (b == BOUNCES) {
+        for (int b = 0; b <= camera.bounces; b++) {
+            if (b == camera.bounces) {
                 rayColor = vec3(0);
                 break;
             }
@@ -92,7 +91,7 @@ void main() {
         pixelColor += rayColor;
     }
 
-    pixelColor = pixelColor / NBSAMPLES;
+    pixelColor = pixelColor / camera.samples;
     pixelColor = sqrt(pixelColor);
 
     if (camera.frame > 2) {
