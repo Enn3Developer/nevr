@@ -3,7 +3,7 @@ use crate::context::{
     build_top_level_acceleration_structure,
 };
 use crate::voxel::{Voxel, VoxelLibrary};
-use glam::{Mat4, Quat, Vec2, Vec3, vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3, vec3};
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
     AabbPositions, AccelerationStructure, AccelerationStructureInstance,
@@ -373,27 +373,15 @@ impl SceneManager {
                     let (scale, rotation, translation) =
                         self.camera.view.to_scale_rotation_translation();
 
-                    let half_yaw = yaw / 2.0;
-                    let q_yaw = Quat::from_xyzw(0.0, half_yaw.sin(), 0.0, half_yaw.cos());
-                    let temp = q_yaw * rotation;
+                    let rot_mat = Mat3::from_quat(rotation);
+                    let yaw_mat = Mat3::from_axis_angle(Vec3::Y, yaw);
+                    let pitch_mat = Mat3::from_axis_angle(Vec3::X, pitch);
 
-                    let right_x = 1.0 - 2.0 * (temp.y * temp.y + temp.z * temp.z);
-                    let right_y = 2.0 * (temp.x * temp.y - temp.w * temp.z);
-                    let right_z = 2.0 * (temp.x * temp.z + temp.w * temp.y);
-                    let right = vec3(right_x, right_y, right_z).normalize_or_zero();
+                    let final_mat = pitch_mat * yaw_mat * rot_mat;
 
-                    let half_pitch = pitch / 2.0;
-                    let q_pitch = Quat::from_xyzw(
-                        half_pitch.sin() * right.x,
-                        half_pitch.sin() * right.y,
-                        half_pitch.sin() * right.z,
-                        half_pitch.cos(),
-                    );
-
-                    let new_quat = temp * q_pitch;
                     self.camera.view = Mat4::from_scale_rotation_translation(
                         scale,
-                        new_quat.normalize(),
+                        Quat::from_mat3(&final_mat),
                         translation,
                     );
                 }
