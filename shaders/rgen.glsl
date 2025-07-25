@@ -9,7 +9,7 @@
 #include "random.glsl"
 #include "raycommon.glsl"
 
-const int NBSAMPLES = 10;
+const int NBSAMPLES = 20;
 const int BOUNCES = 10;
 
 layout (location = 0) rayPayloadEXT RayPayload Ray;
