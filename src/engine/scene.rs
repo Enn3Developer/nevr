@@ -14,6 +14,7 @@ use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::KeyCode;
+use winit::window::CursorGrabMode;
 
 pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
@@ -31,6 +32,7 @@ enum RunCommand {
     AmbientLight(Vec4),
     LightDirection(Vec4),
     ChangeScene(Box<dyn Scene>),
+    GrabCursor(bool),
 }
 
 pub struct RunContext<'a> {
@@ -92,6 +94,10 @@ impl<'a> RunContext<'a> {
 
     pub fn change_scene(&self, scene: impl Scene + 'static) {
         self.add_command(RunCommand::ChangeScene(Box::new(scene)));
+    }
+
+    pub fn grab_cursor(&self, grab_cursor: bool) {
+        self.add_command(RunCommand::GrabCursor(grab_cursor));
     }
 }
 
@@ -434,7 +440,7 @@ impl SceneManager {
         self.input_state.mouse_movement += Vec2::new(delta.0, delta.1);
     }
 
-    pub fn update(&mut self, delta: f32) -> bool {
+    pub fn update(&mut self, graphics_ctx: &mut GraphicsContext, delta: f32) -> bool {
         self.camera.frame += 1;
         self.update_camera = true;
         let mut new_scene = None;
@@ -488,6 +494,17 @@ impl SceneManager {
                     self.light.light_direction = direction.to_array()
                 }
                 RunCommand::ChangeScene(scene) => new_scene = Some(scene),
+                RunCommand::GrabCursor(grab_cursor) => {
+                    graphics_ctx.window.set_cursor_visible(!grab_cursor);
+                    graphics_ctx
+                        .window
+                        .set_cursor_grab(if grab_cursor {
+                            CursorGrabMode::Confined
+                        } else {
+                            CursorGrabMode::None
+                        })
+                        .unwrap();
+                }
             }
         }
 

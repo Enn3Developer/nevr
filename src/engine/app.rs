@@ -49,18 +49,6 @@ impl ApplicationHandler for App {
             event_loop,
             self.window_attributes.clone(),
         );
-
-        self.context
-            .as_ref()
-            .unwrap()
-            .window
-            .set_cursor_grab(CursorGrabMode::Confined)
-            .unwrap();
-        self.context
-            .as_ref()
-            .unwrap()
-            .window
-            .set_cursor_visible(false);
     }
 
     fn window_event(
@@ -93,7 +81,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let start = Instant::now();
-                if self.scene_manager.update(self.last_delta) {
+                if self.scene_manager.update(ctx, self.last_delta) {
                     event_loop.exit();
                 }
 
