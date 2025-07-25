@@ -16,7 +16,7 @@ use winit::keyboard::KeyCode;
 
 pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
-    fn get_blocks(&self) -> &[(&str, Vec3)];
+    fn get_blocks(&self) -> &[(u32, Vec3)];
     fn update(&mut self, ctx: &mut RunContext, delta: f32);
     fn input(&mut self, ctx: &mut RunContext, delta: f32, key_code: KeyCode, state: ElementState);
 }
@@ -133,12 +133,12 @@ impl SceneManager {
                 .current_scene
                 .get_blocks()
                 .iter()
-                .map(|(id, pos)| self.voxel_library.create_block(id, *pos).unwrap())
+                .map(|(id, pos)| self.voxel_library.create_block(*id, *pos).unwrap())
                 .collect::<Vec<_>>();
 
             let voxels = blocks
                 .iter()
-                .map(|block| block.voxel_array(&self.voxel_library))
+                .map(|block| block.voxel_array())
                 .flatten()
                 .collect::<Vec<Voxel>>();
 

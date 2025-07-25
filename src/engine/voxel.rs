@@ -1,6 +1,5 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use std::collections::HashMap;
 use std::sync::Arc;
 use vulkano::acceleration_structure::AabbPositions;
 
@@ -90,14 +89,13 @@ impl VoxelBlock {
         Self { min, voxel_type }
     }
 
-    pub fn voxel_array(&self, voxel_library: &VoxelLibrary) -> impl IntoIterator<Item = Voxel> {
+    pub fn voxel_array(&self) -> impl IntoIterator<Item = Voxel> {
         let voxel_size = 1.0 / self.voxel_type.size as f32;
 
         self.voxel_type
             .voxels
             .voxels
             .iter()
-            .map(|(material, pos)| (voxel_library.material_map.get(material).unwrap(), pos))
             .map(move |(material, pos)| {
                 Voxel::new(
                     self.min + pos * voxel_size,
@@ -109,12 +107,17 @@ impl VoxelBlock {
 }
 
 pub struct RelativeVoxel {
-    voxels: Vec<(String, Vec3)>,
+    voxels: Vec<(u32, Vec3)>,
 }
 
 impl RelativeVoxel {
-    pub fn new(voxels: Vec<(String, Vec3)>) -> Self {
-        Self { voxels }
+    pub fn new(voxels: impl IntoIterator<Item = (impl Into<u32>, Vec3)>) -> Self {
+        Self {
+            voxels: voxels
+                .into_iter()
+                .map(|(id, pos)| (id.into(), pos))
+                .collect(),
+        }
     }
 }
 
@@ -133,35 +136,53 @@ impl VoxelType {
 }
 
 pub struct VoxelLibrary {
-    voxel_map: HashMap<String, Arc<VoxelType>>,
-    material_map: HashMap<String, u32>,
+    voxels: Vec<Arc<VoxelType>>,
     pub(crate) materials: Vec<VoxelMaterial>,
 }
 
 impl VoxelLibrary {
     pub fn new() -> Self {
         Self {
-            voxel_map: HashMap::new(),
+            voxels: vec![],
             materials: vec![],
-            material_map: HashMap::new(),
         }
     }
 
-    pub fn new_material(&mut self, id: impl Into<String>, voxel_material: VoxelMaterial) {
-        let material_id = self.materials.len();
-        self.materials.push(voxel_material);
+    pub fn new_material(&mut self, id: impl Into<u32>, voxel_material: VoxelMaterial) {
+        let material_id = id.into();
 
-        self.material_map.insert(id.into(), material_id as u32);
+        let mut difference = material_id as isize - self.materials.len() as isize;
+
+        if difference < 0 {
+            *self.materials.get_mut(material_id as usize).unwrap() = voxel_material;
+            return;
+        }
+
+        while difference >= 0 {
+            self.materials.push(voxel_material.clone());
+            difference -= 1;
+        }
     }
 
-    pub fn new_type(&mut self, id: impl Into<String>, voxel_type: VoxelType) {
+    pub fn new_type(&mut self, id: impl Into<u32>, voxel_type: VoxelType) {
         let voxel_type = Arc::new(voxel_type);
+        let voxel_id = id.into();
 
-        self.voxel_map.insert(id.into(), voxel_type);
+        let mut difference = voxel_id as isize - self.voxels.len() as isize;
+
+        if difference < 0 {
+            *self.voxels.get_mut(voxel_id as usize).unwrap() = voxel_type;
+            return;
+        }
+
+        while difference >= 0 {
+            self.voxels.push(voxel_type.clone());
+            difference -= 1;
+        }
     }
 
-    pub fn create_block(&self, id: impl AsRef<str>, position: Vec3) -> Option<VoxelBlock> {
-        let voxel_type = self.voxel_map.get(id.as_ref())?.clone();
+    pub fn create_block(&self, id: impl Into<u32>, position: Vec3) -> Option<VoxelBlock> {
+        let voxel_type = self.voxels.get(id.into() as usize)?.clone();
 
         Some(VoxelBlock::new(position, voxel_type))
     }
