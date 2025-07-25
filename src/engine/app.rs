@@ -19,6 +19,7 @@ pub struct App {
     app_name: String,
     app_version: Version,
     scene_manager: SceneManager,
+    last_delta: f32,
 }
 
 impl App {
@@ -35,6 +36,7 @@ impl App {
             app_version: app_version.into(),
             context: None,
             scene_manager: SceneManager::new(main_scene, voxel_library),
+            last_delta: 0.0,
         }
     }
 }
@@ -73,7 +75,7 @@ impl ApplicationHandler for App {
                         ..
                     },
                 ..
-            } => self.scene_manager.input(key_code, state),
+            } => self.scene_manager.input(key_code, state, self.last_delta),
             WindowEvent::RedrawRequested => {
                 let start = Instant::now();
 
@@ -163,6 +165,7 @@ impl ApplicationHandler for App {
                 };
 
                 let end = Instant::now();
+                self.last_delta = (end - start).as_secs_f32();
                 println!(
                     "render time: {:2}ms",
                     (end - start).as_micros() as f32 / 1000.0
