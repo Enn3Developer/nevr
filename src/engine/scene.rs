@@ -30,6 +30,7 @@ enum RunCommand {
     SkyColor(Vec3),
     AmbientLight(Vec4),
     LightDirection(Vec4),
+    ChangeScene(Box<dyn Scene>),
 }
 
 pub struct RunContext<'a> {
@@ -87,6 +88,10 @@ impl<'a> RunContext<'a> {
         }
 
         self.add_command(RunCommand::LightDirection(direction));
+    }
+
+    pub fn change_scene(&self, scene: impl Scene + 'static) {
+        self.add_command(RunCommand::ChangeScene(Box::new(scene)));
     }
 }
 
@@ -432,6 +437,7 @@ impl SceneManager {
     pub fn update(&mut self, delta: f32) -> bool {
         self.camera.frame += 1;
         self.update_camera = true;
+        let mut new_scene = None;
 
         let ctx = RunContext::new(&self.input_state);
         self.current_scene.update(&ctx, delta);
@@ -481,10 +487,18 @@ impl SceneManager {
                 RunCommand::LightDirection(direction) => {
                     self.light.light_direction = direction.to_array()
                 }
+                RunCommand::ChangeScene(scene) => new_scene = Some(scene),
             }
         }
 
         self.input_state.mouse_movement = Vec2::ZERO;
+
+        if let Some(scene) = new_scene {
+            self.current_scene = scene;
+            self.update_camera = true;
+            self.camera.frame = 0;
+        }
+
         false
     }
 }
