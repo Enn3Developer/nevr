@@ -63,6 +63,18 @@ pub struct Camera {
     pub(crate) frame: u32,
 }
 
+impl Camera {
+    pub fn new(projection: Mat4, view: Mat4, aperture: f32, focus_distance: f32) -> Self {
+        Self {
+            projection,
+            view,
+            aperture,
+            focus_distance,
+            frame: 0,
+        }
+    }
+}
+
 #[derive(Debug, BufferContents, Copy, Clone)]
 #[repr(C)]
 pub struct RayCamera {

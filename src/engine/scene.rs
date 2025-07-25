@@ -22,6 +22,7 @@ pub trait Scene {
 }
 
 enum RunCommand {
+    SetCamera(Camera),
     MoveCamera(Vec3, f32),
     RotateCamera(f32, f32),
     CameraConfig(f32, f32),
@@ -52,6 +53,10 @@ impl<'a> RunContext<'a> {
         self.commands.borrow_mut().push(command);
     }
 
+    pub fn set_camera(&self, camera: Camera) {
+        self.add_command(RunCommand::SetCamera(camera));
+    }
+
     pub fn move_camera(&self, movement: Vec3, speed: f32) {
         self.add_command(RunCommand::MoveCamera(movement, speed));
     }
@@ -69,7 +74,7 @@ impl<'a> RunContext<'a> {
     }
 
     pub fn change_sky_color(&self, color: Vec3) {
-        self.add_command(RunCommand::SkyColor(color))
+        self.add_command(RunCommand::SkyColor(color));
     }
 
     pub fn change_ambient_light(&self, color: Vec4) {
@@ -432,6 +437,10 @@ impl SceneManager {
         self.current_scene.update(&ctx, delta);
         for command in ctx.commands.take() {
             match command {
+                RunCommand::SetCamera(camera) => {
+                    self.camera = camera;
+                    self.update_camera = true;
+                }
                 RunCommand::MoveCamera(movement, speed) => {
                     let movement = movement.normalize_or_zero();
                     self.update_camera = true;
