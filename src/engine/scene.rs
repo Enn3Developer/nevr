@@ -24,6 +24,7 @@ pub trait Scene {
 pub enum RunCommand {
     MoveCamera(Vec3, f32),
     RotateCamera(f32, f32),
+    CameraConfig(f32, f32),
     Exit,
     SkyColor(Vec3),
 }
@@ -55,6 +56,10 @@ impl<'a> RunContext<'a> {
 
     pub fn rotate_camera(&self, yaw: f32, pitch: f32) {
         self.add_command(RunCommand::RotateCamera(yaw, pitch));
+    }
+
+    pub fn change_camera_config(&self, aperture: f32, focus_distance: f32) {
+        self.add_command(RunCommand::CameraConfig(aperture, focus_distance));
     }
 
     pub fn request_exit(&self) {
@@ -416,6 +421,12 @@ impl SceneManager {
                         Quat::from_mat3(&final_mat),
                         translation,
                     );
+                }
+                RunCommand::CameraConfig(aperture, focus_distance) => {
+                    self.update_camera = true;
+                    self.camera.frame = 0;
+                    self.camera.aperture = aperture;
+                    self.camera.focus_distance = focus_distance;
                 }
                 RunCommand::Exit => {
                     return true;
