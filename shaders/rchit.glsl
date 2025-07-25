@@ -31,6 +31,11 @@ layout (set = 2, binding = 1) buffer materials {
     Material allMaterials[];
 };
 
+layout (set = 3, binding = 1) uniform Light {
+    vec4 ambient_light;
+    vec4 light_direction;
+} light;
+
 vec3 compute_normal(vec3 hitPos, vec3 aabbMin, vec3 aabbMax) {
     vec3 center = (aabbMin + aabbMax) * 0.5;
 
@@ -48,5 +53,35 @@ void main() {
     Material material = allMaterials[voxel.material_id];
     vec3 normal = compute_normal(hitPos, voxel.minimum, voxel.maximum);
 
+    float light_coefficient = max(dot(-light.light_direction.xyz, normal), light.ambient_light.r);
+
     Ray = Scatter(material, gl_WorldRayDirectionEXT, normal, vec2(0), gl_HitTEXT, Ray.RandomSeed);
+    Ray.ColorAndDistance.rgb = Ray.ColorAndDistance.rgb * light_coefficient;
+
+    if (dot(normal, -light.light_direction.xyz) > 0.0) {
+        float t_min = 0.001;
+        float t_max = 10000.0;
+        vec3 origin = hitPos;
+        vec3 rayDir = -light.light_direction.xyz;
+        uint flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT;
+        isShadowed = true;
+
+        traceRayEXT(
+            top_level_as, // acceleration structure
+            flags, // rayFlags
+            0xFF, // cullMask
+            0, // sbtRecordOffset
+            0, // sbtRecordStride
+            1, // missIndex
+            origin, // ray origin
+            t_min, // ray min range
+            rayDir, // ray direction
+            t_max, // ray max range
+            1            // payload (location = 1)
+        );
+
+        if (isShadowed) {
+            Ray.ColorAndDistance.rgb = Ray.ColorAndDistance.rgb * light.ambient_light.rgb;
+        }
+    }
 }

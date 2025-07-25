@@ -1,9 +1,9 @@
 use crate::context::{
-    Camera, GraphicsContext, RayCamera, build_acceleration_structure_voxels,
+    Camera, GraphicsContext, Light, RayCamera, build_acceleration_structure_voxels,
     build_top_level_acceleration_structure,
 };
 use crate::voxel::{Voxel, VoxelLibrary};
-use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 use std::cell::RefCell;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
@@ -21,12 +21,14 @@ pub trait Scene {
     fn update(&mut self, ctx: &RunContext, delta: f32);
 }
 
-pub enum RunCommand {
+enum RunCommand {
     MoveCamera(Vec3, f32),
     RotateCamera(f32, f32),
     CameraConfig(f32, f32),
     Exit,
     SkyColor(Vec3),
+    AmbientLight(Vec4),
+    LightDirection(Vec4),
 }
 
 pub struct RunContext<'a> {
@@ -69,6 +71,18 @@ impl<'a> RunContext<'a> {
     pub fn change_sky_color(&self, color: Vec3) {
         self.add_command(RunCommand::SkyColor(color))
     }
+
+    pub fn change_ambient_light(&self, color: Vec4) {
+        self.add_command(RunCommand::AmbientLight(color));
+    }
+
+    pub fn change_light_direction(&self, mut direction: Vec4) {
+        if !direction.is_normalized() {
+            direction = direction.normalize_or_zero();
+        }
+
+        self.add_command(RunCommand::LightDirection(direction));
+    }
 }
 
 pub struct InputState {
@@ -105,6 +119,7 @@ pub struct SceneManager {
     camera: Camera,
     update_camera: bool,
     sky_color: Vec3,
+    light: Light,
     camera_buffer: Option<Subbuffer<RayCamera>>,
     blas: Option<Arc<AccelerationStructure>>,
     tlas: Option<Arc<AccelerationStructure>>,
@@ -129,10 +144,15 @@ impl SceneManager {
             view,
             frame: 0,
         };
+        let light = Light {
+            ambient_light: Vec4::new(0.3, 0.3, 0.3, 0.0).to_array(),
+            light_direction: Vec4::new(-0.75, -1.0, 0.0, 0.0).normalize().to_array(),
+        };
 
         Self {
             voxel_library,
             camera,
+            light,
             update_camera: true,
             current_scene: scene,
             camera_buffer: None,
@@ -325,10 +345,28 @@ impl SceneManager {
         )
         .unwrap();
 
+        let light_buffer = Buffer::from_data(
+            ctx.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            self.light,
+        )
+        .unwrap();
+
         let sky_color_descriptor_set = DescriptorSet::new(
             ctx.descriptor_set_allocator.clone(),
             ctx.pipeline_layout.set_layouts()[3].clone(),
-            [WriteDescriptorSet::buffer(0, sky_color_buffer)],
+            [
+                WriteDescriptorSet::buffer(0, sky_color_buffer),
+                WriteDescriptorSet::buffer(1, light_buffer),
+            ],
             [],
         )
         .unwrap();
@@ -428,11 +466,11 @@ impl SceneManager {
                     self.camera.aperture = aperture;
                     self.camera.focus_distance = focus_distance;
                 }
-                RunCommand::Exit => {
-                    return true;
-                }
-                RunCommand::SkyColor(color) => {
-                    self.sky_color = color;
+                RunCommand::Exit => return true,
+                RunCommand::SkyColor(color) => self.sky_color = color,
+                RunCommand::AmbientLight(color) => self.light.ambient_light = color.to_array(),
+                RunCommand::LightDirection(direction) => {
+                    self.light.light_direction = direction.to_array()
                 }
             }
         }

@@ -87,6 +87,13 @@ impl<C: Deref<Target = Camera>> From<C> for RayCamera {
     }
 }
 
+#[derive(Debug, BufferContents, Copy, Clone)]
+#[repr(C)]
+pub struct Light {
+    pub(crate) ambient_light: [f32; 4],
+    pub(crate) light_direction: [f32; 4],
+}
+
 pub struct GraphicsContext {
     instance: Arc<Instance>,
     pub(crate) device: Arc<Device>,
@@ -331,15 +338,26 @@ impl GraphicsContext {
                     DescriptorSetLayout::new(
                         device.clone(),
                         DescriptorSetLayoutCreateInfo {
-                            bindings: [(
-                                0,
-                                DescriptorSetLayoutBinding {
-                                    stages: ShaderStages::MISS,
-                                    ..DescriptorSetLayoutBinding::descriptor_type(
-                                        DescriptorType::StorageBuffer,
-                                    )
-                                },
-                            )]
+                            bindings: [
+                                (
+                                    0,
+                                    DescriptorSetLayoutBinding {
+                                        stages: ShaderStages::MISS,
+                                        ..DescriptorSetLayoutBinding::descriptor_type(
+                                            DescriptorType::StorageBuffer,
+                                        )
+                                    },
+                                ),
+                                (
+                                    1,
+                                    DescriptorSetLayoutBinding {
+                                        stages: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
+                                        ..DescriptorSetLayoutBinding::descriptor_type(
+                                            DescriptorType::UniformBuffer,
+                                        )
+                                    },
+                                ),
+                            ]
                             .into(),
                             ..Default::default()
                         },

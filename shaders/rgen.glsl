@@ -23,6 +23,10 @@ layout (set = 0, binding = 1) uniform Camera {
     uint frame;
 } camera;
 layout (set = 1, binding = 0, rgba32f) uniform image2D image;
+layout (set = 3, binding = 1) uniform Light {
+    vec4 ambient_light;
+    vec4 light_direction;
+} light;
 
 void main() {
     Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), camera.frame * NBSAMPLES * BOUNCES);
