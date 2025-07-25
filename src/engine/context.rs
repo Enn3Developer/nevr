@@ -375,17 +375,23 @@ impl GraphicsContext {
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
+            let shadow = rayshadow::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
 
             let stages = [
                 PipelineShaderStageCreateInfo::new(raygen),
                 PipelineShaderStageCreateInfo::new(closest_hit),
                 PipelineShaderStageCreateInfo::new(miss),
                 PipelineShaderStageCreateInfo::new(intersect),
+                PipelineShaderStageCreateInfo::new(shadow),
             ];
 
             let groups = [
                 RayTracingShaderGroupCreateInfo::General { general_shader: 0 },
                 RayTracingShaderGroupCreateInfo::General { general_shader: 2 },
+                RayTracingShaderGroupCreateInfo::General { general_shader: 4 },
                 RayTracingShaderGroupCreateInfo::ProceduralHit {
                     closest_hit_shader: Some(1),
                     any_hit_shader: None,
@@ -399,7 +405,7 @@ impl GraphicsContext {
                 RayTracingPipelineCreateInfo {
                     stages: stages.to_vec().into(),
                     groups: groups.to_vec().into(),
-                    max_pipeline_ray_recursion_depth: 10,
+                    max_pipeline_ray_recursion_depth: 2,
                     ..RayTracingPipelineCreateInfo::layout(pipeline_layout.clone())
                 },
             )
@@ -507,6 +513,14 @@ mod rayintersect {
     vulkano_shaders::shader! {
         ty: "intersection",
         path: "./shaders/rintersect.glsl",
+        vulkan_version: "1.3"
+    }
+}
+
+mod rayshadow {
+    vulkano_shaders::shader! {
+        ty: "miss",
+        path: "./shaders/rmiss_shadow.glsl",
         vulkan_version: "1.3"
     }
 }

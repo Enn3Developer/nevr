@@ -14,6 +14,7 @@
 hitAttributeEXT vec2 attribs;
 
 layout (location = 0) rayPayloadInEXT RayPayload Ray;
+layout (location = 1) rayPayloadEXT bool isShadowed;
 layout (set = 0, binding = 0) uniform accelerationStructureEXT top_level_as;
 
 struct Voxel {
