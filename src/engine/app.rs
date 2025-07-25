@@ -8,10 +8,10 @@ use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo, acquire_next
 use vulkano::sync::GpuFuture;
 use vulkano::{Validated, Version, VulkanError, sync};
 use winit::application::ApplicationHandler;
-use winit::event::{KeyEvent, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
-use winit::window::{WindowAttributes, WindowId};
+use winit::window::{CursorGrabMode, WindowAttributes, WindowId};
 
 pub struct App {
     context: Option<GraphicsContext>,
@@ -49,6 +49,18 @@ impl ApplicationHandler for App {
             event_loop,
             self.window_attributes.clone(),
         );
+
+        self.context
+            .as_ref()
+            .unwrap()
+            .window
+            .set_cursor_grab(CursorGrabMode::Confined)
+            .unwrap();
+        self.context
+            .as_ref()
+            .unwrap()
+            .window
+            .set_cursor_visible(false);
     }
 
     fn window_event(
@@ -75,10 +87,15 @@ impl ApplicationHandler for App {
                         ..
                     },
                 ..
-            } => self.scene_manager.input(key_code, state, self.last_delta),
+            } => self.scene_manager.input(key_code, state),
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.scene_manager.input_mouse(button, state)
+            }
             WindowEvent::RedrawRequested => {
                 let start = Instant::now();
-                self.scene_manager.update();
+                if self.scene_manager.update(self.last_delta) {
+                    event_loop.exit();
+                }
 
                 let window_size = ctx.window.inner_size();
 
@@ -174,6 +191,20 @@ impl ApplicationHandler for App {
 
                 ctx.window.request_redraw();
             }
+            _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => self
+                .scene_manager
+                .input_mouse_movement((delta.0 as f32, delta.1 as f32)),
             _ => {}
         }
     }

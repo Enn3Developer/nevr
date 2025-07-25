@@ -3,7 +3,7 @@ use crate::context::{
     build_top_level_acceleration_structure,
 };
 use crate::voxel::{Voxel, VoxelLibrary};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3, vec3};
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
     AabbPositions, AccelerationStructure, AccelerationStructureInstance,
@@ -11,35 +11,80 @@ use vulkano::acceleration_structure::{
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use winit::event::ElementState;
+use winit::event::{ElementState, MouseButton};
 use winit::keyboard::KeyCode;
 
 pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
     fn get_blocks(&self) -> &[(u32, Vec3)];
     fn update(&mut self, ctx: &mut RunContext, delta: f32);
-    fn input(&mut self, ctx: &mut RunContext, delta: f32, key_code: KeyCode, state: ElementState);
 }
 
 pub enum RunCommand {
-    MoveCamera(Vec3),
+    MoveCamera(Vec3, f32),
+    RotateCamera(f32, f32),
+    Exit,
 }
 
-pub struct RunContext {
+pub struct RunContext<'a> {
     commands: Vec<RunCommand>,
+    input_state: &'a InputState,
 }
 
-impl RunContext {
-    fn new() -> Self {
-        Self { commands: vec![] }
+impl<'a> RunContext<'a> {
+    fn new(input_state: &'a InputState) -> Self {
+        Self {
+            input_state,
+            commands: vec![],
+        }
+    }
+
+    pub fn input_state(&self) -> &InputState {
+        self.input_state
     }
 
     pub fn add_command(&mut self, command: RunCommand) {
         self.commands.push(command);
     }
 
-    pub fn move_camera(&mut self, movement: Vec3) {
-        self.add_command(RunCommand::MoveCamera(movement));
+    pub fn move_camera(&mut self, movement: Vec3, speed: f32) {
+        self.add_command(RunCommand::MoveCamera(movement, speed));
+    }
+
+    pub fn rotate_camera(&mut self, yaw: f32, pitch: f32) {
+        self.add_command(RunCommand::RotateCamera(yaw, pitch));
+    }
+
+    pub fn request_exit(&mut self) {
+        self.add_command(RunCommand::Exit);
+    }
+}
+
+pub struct InputState {
+    keys: Vec<KeyCode>,
+    buttons: Vec<MouseButton>,
+    mouse_movement: Vec2,
+}
+
+impl InputState {
+    fn new() -> Self {
+        Self {
+            keys: vec![],
+            buttons: vec![],
+            mouse_movement: Vec2::ZERO,
+        }
+    }
+
+    pub fn is_key_pressed(&self, key_code: KeyCode) -> bool {
+        self.keys.contains(&key_code)
+    }
+
+    pub fn is_button_pressed(&self, button: MouseButton) -> bool {
+        self.buttons.contains(&button)
+    }
+
+    pub fn mouse_movement(&self) -> Vec2 {
+        self.mouse_movement
     }
 }
 
@@ -53,6 +98,7 @@ pub struct SceneManager {
     tlas: Option<Arc<AccelerationStructure>>,
     descriptor_set: Option<Arc<DescriptorSet>>,
     intersect_descriptor_set: Option<Arc<DescriptorSet>>,
+    input_state: InputState,
 }
 
 impl SceneManager {
@@ -82,6 +128,7 @@ impl SceneManager {
             tlas: None,
             descriptor_set: None,
             intersect_descriptor_set: None,
+            input_state: InputState::new(),
         }
     }
 
@@ -256,27 +303,107 @@ impl SceneManager {
         );
     }
 
-    pub fn input(&mut self, key_code: KeyCode, state: ElementState, delta: f32) {
-        let mut ctx = RunContext::new();
-        self.current_scene.input(&mut ctx, delta, key_code, state);
-
-        for command in ctx.commands {
-            match command {
-                RunCommand::MoveCamera(movement) => {
-                    self.update_camera = true;
-                    let (scale, rotation, mut translation) =
-                        self.camera.view.to_scale_rotation_translation();
-                    translation -= rotation * (rotation * movement);
-                    self.camera.view =
-                        Mat4::from_scale_rotation_translation(scale, rotation, translation);
-                    self.camera.frame = 0;
+    pub fn input(&mut self, key_code: KeyCode, state: ElementState) {
+        match state {
+            ElementState::Pressed => {
+                if !self.input_state.is_key_pressed(key_code) {
+                    self.input_state.keys.push(key_code)
+                }
+            }
+            ElementState::Released => {
+                if let Some((i, _)) = self
+                    .input_state
+                    .keys
+                    .iter()
+                    .enumerate()
+                    .find(|(_i, k)| **k == key_code)
+                {
+                    self.input_state.keys.remove(i);
                 }
             }
         }
     }
 
-    pub fn update(&mut self) {
+    pub fn input_mouse(&mut self, button: MouseButton, state: ElementState) {
+        match state {
+            ElementState::Pressed => {
+                if !self.input_state.is_button_pressed(button) {
+                    self.input_state.buttons.push(button)
+                }
+            }
+            ElementState::Released => {
+                if let Some((i, _)) = self
+                    .input_state
+                    .buttons
+                    .iter()
+                    .enumerate()
+                    .find(|(_i, b)| **b == button)
+                {
+                    self.input_state.buttons.remove(i);
+                }
+            }
+        }
+    }
+
+    pub fn input_mouse_movement(&mut self, delta: (f32, f32)) {
+        self.input_state.mouse_movement += Vec2::new(delta.0, delta.1);
+    }
+
+    pub fn update(&mut self, delta: f32) -> bool {
         self.camera.frame += 1;
         self.update_camera = true;
+
+        let mut ctx = RunContext::new(&self.input_state);
+        self.current_scene.update(&mut ctx, delta);
+        for command in ctx.commands {
+            match command {
+                RunCommand::MoveCamera(movement, speed) => {
+                    let movement = movement.normalize_or_zero();
+                    self.update_camera = true;
+                    let (scale, rotation, mut translation) =
+                        self.camera.view.to_scale_rotation_translation();
+                    translation -= (rotation * (rotation * movement)) * speed * delta;
+                    self.camera.view =
+                        Mat4::from_scale_rotation_translation(scale, rotation, translation);
+                    self.camera.frame = 0;
+                }
+                RunCommand::RotateCamera(yaw, pitch) => {
+                    self.update_camera = true;
+                    self.camera.frame = 0;
+                    let (scale, rotation, translation) =
+                        self.camera.view.to_scale_rotation_translation();
+
+                    let half_yaw = yaw / 2.0;
+                    let q_yaw = Quat::from_xyzw(0.0, half_yaw.sin(), 0.0, half_yaw.cos());
+                    let temp = q_yaw * rotation;
+
+                    let right_x = 1.0 - 2.0 * (temp.y * temp.y + temp.z * temp.z);
+                    let right_y = 2.0 * (temp.x * temp.y - temp.w * temp.z);
+                    let right_z = 2.0 * (temp.x * temp.z + temp.w * temp.y);
+                    let right = vec3(right_x, right_y, right_z).normalize_or_zero();
+
+                    let half_pitch = pitch / 2.0;
+                    let q_pitch = Quat::from_xyzw(
+                        half_pitch.sin() * right.x,
+                        half_pitch.sin() * right.y,
+                        half_pitch.sin() * right.z,
+                        half_pitch.cos(),
+                    );
+
+                    let new_quat = temp * q_pitch;
+                    self.camera.view = Mat4::from_scale_rotation_translation(
+                        scale,
+                        new_quat.normalize(),
+                        translation,
+                    );
+                }
+                RunCommand::Exit => {
+                    return true;
+                }
+            }
+        }
+
+        self.input_state.mouse_movement = Vec2::ZERO;
+        false
     }
 }
