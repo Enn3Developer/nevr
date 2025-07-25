@@ -3,7 +3,8 @@ use crate::context::{
     build_top_level_acceleration_structure,
 };
 use crate::voxel::{Voxel, VoxelLibrary};
-use glam::{Mat3, Mat4, Quat, Vec2, Vec3, vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
+use std::cell::RefCell;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
     AabbPositions, AccelerationStructure, AccelerationStructureInstance,
@@ -17,17 +18,18 @@ use winit::keyboard::KeyCode;
 pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
     fn get_blocks(&self) -> &[(u32, Vec3)];
-    fn update(&mut self, ctx: &mut RunContext, delta: f32);
+    fn update(&mut self, ctx: &RunContext, delta: f32);
 }
 
 pub enum RunCommand {
     MoveCamera(Vec3, f32),
     RotateCamera(f32, f32),
     Exit,
+    SkyColor(Vec3),
 }
 
 pub struct RunContext<'a> {
-    commands: Vec<RunCommand>,
+    commands: RefCell<Vec<RunCommand>>,
     input_state: &'a InputState,
 }
 
@@ -35,7 +37,7 @@ impl<'a> RunContext<'a> {
     fn new(input_state: &'a InputState) -> Self {
         Self {
             input_state,
-            commands: vec![],
+            commands: RefCell::new(vec![]),
         }
     }
 
@@ -43,20 +45,24 @@ impl<'a> RunContext<'a> {
         self.input_state
     }
 
-    pub fn add_command(&mut self, command: RunCommand) {
-        self.commands.push(command);
+    fn add_command(&self, command: RunCommand) {
+        self.commands.borrow_mut().push(command);
     }
 
-    pub fn move_camera(&mut self, movement: Vec3, speed: f32) {
+    pub fn move_camera(&self, movement: Vec3, speed: f32) {
         self.add_command(RunCommand::MoveCamera(movement, speed));
     }
 
-    pub fn rotate_camera(&mut self, yaw: f32, pitch: f32) {
+    pub fn rotate_camera(&self, yaw: f32, pitch: f32) {
         self.add_command(RunCommand::RotateCamera(yaw, pitch));
     }
 
-    pub fn request_exit(&mut self) {
+    pub fn request_exit(&self) {
         self.add_command(RunCommand::Exit);
+    }
+
+    pub fn change_sky_color(&self, color: Vec3) {
+        self.add_command(RunCommand::SkyColor(color))
     }
 }
 
@@ -93,6 +99,7 @@ pub struct SceneManager {
     voxel_library: VoxelLibrary,
     camera: Camera,
     update_camera: bool,
+    sky_color: Vec3,
     camera_buffer: Option<Subbuffer<RayCamera>>,
     blas: Option<Arc<AccelerationStructure>>,
     tlas: Option<Arc<AccelerationStructure>>,
@@ -129,6 +136,7 @@ impl SceneManager {
             descriptor_set: None,
             intersect_descriptor_set: None,
             input_state: InputState::new(),
+            sky_color: Vec3::new(0.5, 0.7, 1.0),
         }
     }
 
@@ -297,9 +305,33 @@ impl SceneManager {
             );
         }
 
+        let sky_color_buffer = Buffer::from_data(
+            ctx.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            self.sky_color.to_array(),
+        )
+        .unwrap();
+
+        let sky_color_descriptor_set = DescriptorSet::new(
+            ctx.descriptor_set_allocator.clone(),
+            ctx.pipeline_layout.set_layouts()[3].clone(),
+            [WriteDescriptorSet::buffer(0, sky_color_buffer)],
+            [],
+        )
+        .unwrap();
+
         ctx.draw(
             self.descriptor_set.clone().unwrap(),
             self.intersect_descriptor_set.clone().unwrap(),
+            sky_color_descriptor_set,
         );
     }
 
@@ -353,9 +385,9 @@ impl SceneManager {
         self.camera.frame += 1;
         self.update_camera = true;
 
-        let mut ctx = RunContext::new(&self.input_state);
-        self.current_scene.update(&mut ctx, delta);
-        for command in ctx.commands {
+        let ctx = RunContext::new(&self.input_state);
+        self.current_scene.update(&ctx, delta);
+        for command in ctx.commands.take() {
             match command {
                 RunCommand::MoveCamera(movement, speed) => {
                     let movement = movement.normalize_or_zero();
@@ -387,6 +419,9 @@ impl SceneManager {
                 }
                 RunCommand::Exit => {
                     return true;
+                }
+                RunCommand::SkyColor(color) => {
+                    self.sky_color = color;
                 }
             }
         }

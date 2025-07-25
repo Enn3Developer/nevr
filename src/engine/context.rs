@@ -328,6 +328,23 @@ impl GraphicsContext {
                         },
                     )
                     .ok()?,
+                    DescriptorSetLayout::new(
+                        device.clone(),
+                        DescriptorSetLayoutCreateInfo {
+                            bindings: [(
+                                0,
+                                DescriptorSetLayoutBinding {
+                                    stages: ShaderStages::MISS,
+                                    ..DescriptorSetLayoutBinding::descriptor_type(
+                                        DescriptorType::StorageBuffer,
+                                    )
+                                },
+                            )]
+                            .into(),
+                            ..Default::default()
+                        },
+                    )
+                    .ok()?,
                 ],
                 ..Default::default()
             },
@@ -455,6 +472,7 @@ impl GraphicsContext {
         &mut self,
         descriptor_set: Arc<DescriptorSet>,
         intersect_descriptor_set: Arc<DescriptorSet>,
+        sky_color_descriptor_set: Arc<DescriptorSet>,
     ) {
         let builder = self.builder.as_mut().unwrap();
 
@@ -469,6 +487,7 @@ impl GraphicsContext {
                         .1
                         .clone(),
                     intersect_descriptor_set,
+                    sky_color_descriptor_set,
                 ],
             )
             .unwrap()
