@@ -2,7 +2,7 @@ use crate::context::{
     Camera, GraphicsContext, Light, RayCamera, build_acceleration_structure_voxels,
     build_top_level_acceleration_structure,
 };
-use crate::voxel::{Voxel, VoxelLibrary};
+use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -35,6 +35,8 @@ enum RunCommand {
     GrabCursor(bool),
     Samples(u32),
     Bounces(u32),
+    VoxelMaterial(u32, VoxelMaterial),
+    VoxelType(u32, VoxelType),
 }
 
 pub struct RunContext<'a> {
@@ -108,6 +110,14 @@ impl<'a> RunContext<'a> {
 
     pub fn set_bounces(&self, bounces: u32) {
         self.add_command(RunCommand::Bounces(bounces));
+    }
+
+    pub fn add_voxel_material(&self, id: impl Into<u32>, material: VoxelMaterial) {
+        self.add_command(RunCommand::VoxelMaterial(id.into(), material));
+    }
+
+    pub fn add_voxel_type(&self, id: impl Into<u32>, voxel_type: VoxelType) {
+        self.add_command(RunCommand::VoxelType(id.into(), voxel_type));
     }
 }
 
@@ -526,6 +536,12 @@ impl SceneManager {
                     self.camera.bounces = bounces;
                     self.camera.frame = 0;
                     self.update_camera = true;
+                }
+                RunCommand::VoxelMaterial(id, material) => {
+                    self.voxel_library.new_material(id, material)
+                }
+                RunCommand::VoxelType(id, voxel_type) => {
+                    self.voxel_library.new_type(id, voxel_type)
                 }
             }
         }
