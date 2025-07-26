@@ -1,3 +1,4 @@
+use egui_winit_vulkano::{Gui, GuiConfig};
 use glam::Mat4;
 use std::iter;
 use std::ops::Deref;
@@ -35,7 +36,7 @@ use vulkano::device::{
 };
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
-use vulkano::image::{Image, ImageFormatInfo, ImageUsage};
+use vulkano::image::{Image, ImageFormatInfo, ImageUsage, SampleCount};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::allocator::{
     AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryAllocator, MemoryTypeFilter,
@@ -48,7 +49,10 @@ use vulkano::pipeline::ray_tracing::{
 };
 use vulkano::pipeline::{PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::shader::ShaderStages;
-use vulkano::swapchain::{PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo};
+use vulkano::swapchain::{
+    ColorSpace, PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateFlags,
+    SwapchainCreateInfo,
+};
 use vulkano::sync::GpuFuture;
 use vulkano::{Version, VulkanLibrary, sync};
 use winit::event_loop::ActiveEventLoop;
@@ -131,13 +135,14 @@ pub struct GraphicsContext {
     pub(crate) previous_frame: Option<Box<dyn GpuFuture>>,
     pub(crate) recreate_swapchain: bool,
     pub(crate) memory_allocator: Arc<dyn MemoryAllocator>,
-    swapchain_image_sets: Vec<(Arc<ImageView>, Arc<DescriptorSet>)>,
+    pub(crate) swapchain_image_sets: Vec<(Arc<ImageView>, Arc<DescriptorSet>)>,
     pub(crate) descriptor_set_allocator: Arc<dyn DescriptorSetAllocator>,
     pub(crate) pipeline_layout: Arc<PipelineLayout>,
     shader_binding_table: ShaderBindingTable,
     pipeline: Arc<RayTracingPipeline>,
     pub(crate) builder: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
     pub(crate) image_index: Option<u32>,
+    pub(crate) gui: Gui,
 }
 
 impl GraphicsContext {
@@ -258,12 +263,24 @@ impl GraphicsContext {
                     .physical_device()
                     .image_format_properties(ImageFormatInfo {
                         format: *format,
-                        usage: ImageUsage::STORAGE,
+                        usage: ImageUsage::STORAGE | ImageUsage::COLOR_ATTACHMENT,
                         ..Default::default()
                     })
                     .unwrap()
                     .is_some()
             })?;
+
+        let gui = Gui::new(
+            event_loop,
+            surface.clone(),
+            queue.clone(),
+            image_format,
+            GuiConfig {
+                samples: SampleCount::Sample1,
+                allow_srgb_render_target: true,
+                is_overlay: true,
+            },
+        );
 
         let (swapchain, images) = Swapchain::new(
             device.clone(),
@@ -273,7 +290,7 @@ impl GraphicsContext {
                 image_format,
                 image_color_space,
                 image_extent: window_size.into(),
-                image_usage: ImageUsage::STORAGE,
+                image_usage: ImageUsage::STORAGE | ImageUsage::COLOR_ATTACHMENT,
                 composite_alpha: surface_capabilities
                     .supported_composite_alpha
                     .into_iter()
@@ -499,6 +516,7 @@ impl GraphicsContext {
             pipeline_layout,
             shader_binding_table,
             pipeline,
+            gui,
             recreate_swapchain: false,
             builder: None,
             image_index: None,

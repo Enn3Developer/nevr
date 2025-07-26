@@ -1,7 +1,6 @@
 use crate::engine::context::GraphicsContext;
 use crate::scene::{Scene, SceneManager};
 use crate::voxel::VoxelLibrary;
-use std::sync::Arc;
 use std::time::Instant;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo, acquire_next_image};
@@ -11,7 +10,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
-use winit::window::{CursorGrabMode, WindowAttributes, WindowId};
+use winit::window::{WindowAttributes, WindowId};
 
 pub struct App {
     context: Option<GraphicsContext>,
@@ -59,6 +58,10 @@ impl ApplicationHandler for App {
     ) {
         let ctx = self.context.as_mut().unwrap();
 
+        if ctx.gui.update(&event) {
+            return;
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 println!("Closing");
@@ -84,6 +87,8 @@ impl ApplicationHandler for App {
                 if self.scene_manager.update(ctx, self.last_delta) {
                     event_loop.exit();
                 }
+
+                self.scene_manager.ui(&mut ctx.gui);
 
                 let window_size = ctx.window.inner_size();
 
@@ -142,11 +147,16 @@ impl ApplicationHandler for App {
                 let builder = ctx.builder.take().unwrap();
                 let command_buffer = builder.build().unwrap();
 
+                let after_future = ctx.gui.draw_on_image(
+                    acquire_future,
+                    ctx.swapchain_image_sets[image_index as usize].0.clone(),
+                );
+
                 let future = ctx
                     .previous_frame
                     .take()
                     .unwrap()
-                    .join(acquire_future)
+                    .join(after_future)
                     .then_execute(ctx.queue.clone(), command_buffer)
                     .unwrap()
                     .then_swapchain_present(

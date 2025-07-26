@@ -3,6 +3,7 @@ use crate::context::{
     build_top_level_acceleration_structure,
 };
 use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
+use egui_winit_vulkano::Gui;
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
     fn get_blocks(&self) -> &[(u32, Vec3)];
     fn update(&mut self, ctx: &RunContext, delta: f32);
+    fn ui(&mut self, gui: &mut Gui);
 }
 
 enum RunCommand {
@@ -416,6 +418,10 @@ impl SceneManager {
         );
     }
 
+    pub fn ui(&mut self, gui: &mut Gui) {
+        self.current_scene.ui(gui);
+    }
+
     pub fn input(&mut self, key_code: KeyCode, state: ElementState) {
         match state {
             ElementState::Pressed => {
@@ -521,7 +527,7 @@ impl SceneManager {
                     graphics_ctx
                         .window
                         .set_cursor_grab(if grab_cursor {
-                            CursorGrabMode::Confined
+                            CursorGrabMode::Locked
                         } else {
                             CursorGrabMode::None
                         })
