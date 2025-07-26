@@ -21,7 +21,7 @@ pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
     fn get_blocks(&self) -> &[(u32, Vec3)];
     fn update(&mut self, ctx: &RunContext, delta: f32);
-    fn ui(&mut self, gui: &mut Gui);
+    fn ui(&mut self, gui: &mut Gui, ctx: &RunContext, delta: f32);
 }
 
 enum RunCommand {
@@ -418,8 +418,11 @@ impl SceneManager {
         );
     }
 
-    pub fn ui(&mut self, gui: &mut Gui) {
-        self.current_scene.ui(gui);
+    pub fn ui(&mut self, graphics_ctx: &mut GraphicsContext, delta: f32) {
+        let ctx = RunContext::new(&self.input_state);
+        self.current_scene.ui(&mut graphics_ctx.gui, &ctx, delta);
+
+        self.parse_commands(ctx.commands.take(), graphics_ctx, delta);
     }
 
     pub fn input(&mut self, key_code: KeyCode, state: ElementState) {
@@ -469,13 +472,26 @@ impl SceneManager {
     }
 
     pub fn update(&mut self, graphics_ctx: &mut GraphicsContext, delta: f32) -> bool {
+        let ctx = RunContext::new(&self.input_state);
+        self.current_scene.update(&ctx, delta);
+
+        let result = self.parse_commands(ctx.commands.take(), graphics_ctx, delta);
+
+        self.input_state.mouse_movement = Vec2::ZERO;
+        result
+    }
+
+    fn parse_commands(
+        &mut self,
+        commands: Vec<RunCommand>,
+        graphics_ctx: &mut GraphicsContext,
+        delta: f32,
+    ) -> bool {
         self.camera.frame += 1;
         self.update_camera = true;
         let mut new_scene = None;
 
-        let ctx = RunContext::new(&self.input_state);
-        self.current_scene.update(&ctx, delta);
-        for command in ctx.commands.take() {
+        for command in commands {
             match command {
                 RunCommand::SetCamera(camera) => {
                     self.camera = camera;
@@ -497,17 +513,11 @@ impl SceneManager {
                     let (scale, rotation, translation) =
                         self.camera.view.to_scale_rotation_translation();
 
-                    let rot_mat = Mat3::from_quat(rotation);
-                    let yaw_mat = Mat3::from_axis_angle(Vec3::Y, yaw);
-                    let pitch_mat = Mat3::from_axis_angle(Vec3::X, pitch);
+                    let x_quat = Quat::from_axis_angle(Vec3::Y, yaw);
+                    let y_quat = Quat::from_axis_angle(Vec3::NEG_X, pitch);
 
-                    let final_mat = pitch_mat * yaw_mat * rot_mat;
-
-                    self.camera.view = Mat4::from_scale_rotation_translation(
-                        scale,
-                        Quat::from_mat3(&final_mat),
-                        translation,
-                    );
+                    self.camera.view =
+                        Mat4::from_scale_rotation_translation(scale, y_quat * x_quat, translation);
                 }
                 RunCommand::CameraConfig(aperture, focus_distance) => {
                     self.update_camera = true;
@@ -551,8 +561,6 @@ impl SceneManager {
                 }
             }
         }
-
-        self.input_state.mouse_movement = Vec2::ZERO;
 
         if let Some(scene) = new_scene {
             self.current_scene = scene;

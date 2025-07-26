@@ -58,9 +58,7 @@ impl ApplicationHandler for App {
     ) {
         let ctx = self.context.as_mut().unwrap();
 
-        if ctx.gui.update(&event) {
-            return;
-        }
+        let exclusive = ctx.gui.update(&event);
 
         match event {
             WindowEvent::CloseRequested => {
@@ -78,8 +76,8 @@ impl ApplicationHandler for App {
                         ..
                     },
                 ..
-            } => self.scene_manager.input(key_code, state),
-            WindowEvent::MouseInput { state, button, .. } => {
+            } if !exclusive => self.scene_manager.input(key_code, state),
+            WindowEvent::MouseInput { state, button, .. } if !exclusive => {
                 self.scene_manager.input_mouse(button, state)
             }
             WindowEvent::RedrawRequested => {
@@ -88,7 +86,7 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                 }
 
-                self.scene_manager.ui(&mut ctx.gui);
+                self.scene_manager.ui(ctx, self.last_delta);
 
                 let window_size = ctx.window.inner_size();
 
@@ -147,18 +145,20 @@ impl ApplicationHandler for App {
                 let builder = ctx.builder.take().unwrap();
                 let command_buffer = builder.build().unwrap();
 
-                let after_future = ctx.gui.draw_on_image(
-                    acquire_future,
-                    ctx.swapchain_image_sets[image_index as usize].0.clone(),
-                );
-
                 let future = ctx
                     .previous_frame
                     .take()
                     .unwrap()
-                    .join(after_future)
+                    .join(acquire_future)
                     .then_execute(ctx.queue.clone(), command_buffer)
-                    .unwrap()
+                    .unwrap();
+
+                let after_future = ctx.gui.draw_on_image(
+                    future,
+                    ctx.swapchain_image_sets[image_index as usize].0.clone(),
+                );
+
+                let future = after_future
                     .then_swapchain_present(
                         ctx.queue.clone(),
                         SwapchainPresentInfo::swapchain_image_index(

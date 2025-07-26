@@ -94,7 +94,7 @@ void main() {
     pixelColor = pixelColor / camera.samples;
     pixelColor = sqrt(pixelColor);
 
-    if (camera.frame > 2) {
+    if (false) {
         vec3 old_color = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
         vec3 color = (old_color * camera.frame + pixelColor) / (camera.frame + 1);
         imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(color, 1.0));
