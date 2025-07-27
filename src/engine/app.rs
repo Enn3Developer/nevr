@@ -18,7 +18,7 @@ pub struct App {
     app_name: String,
     app_version: Version,
     scene_manager: SceneManager,
-    last_delta: f32,
+    last_delta: Instant,
 }
 
 impl App {
@@ -35,7 +35,7 @@ impl App {
             app_version: app_version.into(),
             context: None,
             scene_manager: SceneManager::new(main_scene, voxel_library),
-            last_delta: 0.0,
+            last_delta: Instant::now(),
         }
     }
 }
@@ -81,12 +81,14 @@ impl ApplicationHandler for App {
                 self.scene_manager.input_mouse(button, state)
             }
             WindowEvent::RedrawRequested => {
-                let start = Instant::now();
-                if self.scene_manager.update(ctx, self.last_delta) {
+                let current = Instant::now();
+                let delta = (current - self.last_delta).as_secs_f32();
+                self.last_delta = current;
+                if self.scene_manager.update(ctx, delta) {
                     event_loop.exit();
                 }
 
-                self.scene_manager.ui(ctx, self.last_delta);
+                self.scene_manager.ui(ctx, delta);
 
                 let window_size = ctx.window.inner_size();
 
@@ -180,12 +182,7 @@ impl ApplicationHandler for App {
                     }
                 };
 
-                let end = Instant::now();
-                self.last_delta = (end - start).as_secs_f32();
-                println!(
-                    "render time: {:2}ms",
-                    (end - start).as_micros() as f32 / 1000.0
-                );
+                println!("render time: {:.2}ms", delta * 1000.0);
 
                 ctx.window.request_redraw();
             }

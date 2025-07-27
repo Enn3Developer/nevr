@@ -4,7 +4,7 @@ use crate::context::{
 };
 use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
 use egui_winit_vulkano::Gui;
-use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
+use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 use std::cell::RefCell;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
@@ -513,11 +513,15 @@ impl SceneManager {
                     let (scale, rotation, translation) =
                         self.camera.view.to_scale_rotation_translation();
 
-                    let x_quat = Quat::from_axis_angle(Vec3::Y, yaw);
-                    let y_quat = Quat::from_axis_angle(Vec3::NEG_X, pitch);
+                    let direction = Vec3::new(
+                        yaw.cos() * pitch.cos(),
+                        pitch.sin(),
+                        yaw.sin() * pitch.cos(),
+                    )
+                    .normalize();
 
                     self.camera.view =
-                        Mat4::from_scale_rotation_translation(scale, y_quat * x_quat, translation);
+                        Mat4::look_at_rh(translation, translation + direction, Vec3::NEG_Y);
                 }
                 RunCommand::CameraConfig(aperture, focus_distance) => {
                     self.update_camera = true;
