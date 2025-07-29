@@ -1,16 +1,18 @@
+use crate::camera::{Camera, VoxelCamera};
 use crate::context::{
-    Camera, GraphicsContext, Light, RayCamera, build_acceleration_structure_voxels,
+    GraphicsContext, Light, build_acceleration_structure_voxels,
     build_top_level_acceleration_structure,
 };
 use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
+use crate::vulkan_instance::VulkanInstance;
 use egui_winit_vulkano::Gui;
-use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use std::cell::RefCell;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
     AabbPositions, AccelerationStructure, AccelerationStructureInstance,
 };
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use winit::event::{ElementState, MouseButton};
@@ -152,13 +154,12 @@ impl InputState {
 }
 
 pub struct SceneManager {
+    vulkan_instance: Arc<VulkanInstance>,
     current_scene: Box<dyn Scene>,
     voxel_library: VoxelLibrary,
-    camera: Camera,
-    update_camera: bool,
+    camera: VoxelCamera,
     sky_color: Vec3,
     light: Light,
-    camera_buffer: Option<Subbuffer<RayCamera>>,
     blas: Option<Arc<AccelerationStructure>>,
     tlas: Option<Arc<AccelerationStructure>>,
     descriptor_set: Option<Arc<DescriptorSet>>,
@@ -167,7 +168,11 @@ pub struct SceneManager {
 }
 
 impl SceneManager {
-    pub fn new(scene: Box<dyn Scene>, voxel_library: VoxelLibrary) -> Self {
+    pub fn new(
+        vulkan_instance: Arc<VulkanInstance>,
+        scene: Box<dyn Scene>,
+        voxel_library: VoxelLibrary,
+    ) -> Self {
         let proj = Mat4::perspective_rh(90.0_f32.to_radians(), 16.0 / 9.0, 0.001, 1000.0);
         let view = Mat4::look_at_rh(
             Vec3::new(0.0, 2.0, 0.0),
@@ -180,22 +185,23 @@ impl SceneManager {
             focus_distance: 3.4,
             projection: proj,
             view,
-            frame: 0,
             samples: 20,
             bounces: 10,
         };
+
+        let camera = VoxelCamera::new(camera, vulkan_instance.clone()).unwrap();
+
         let light = Light {
             ambient_light: Vec4::new(0.3, 0.3, 0.3, 0.0).to_array(),
             light_direction: Vec4::new(-0.75, -1.0, 0.0, 0.0).normalize().to_array(),
         };
 
         Self {
+            vulkan_instance,
             voxel_library,
             camera,
             light,
-            update_camera: true,
             current_scene: scene,
-            camera_buffer: None,
             blas: None,
             tlas: None,
             descriptor_set: None,
@@ -206,40 +212,19 @@ impl SceneManager {
     }
 
     pub(crate) fn draw(&mut self, ctx: &mut GraphicsContext) {
-        if self.update_camera {
-            self.update_camera = false;
-
-            let ray_camera = Arc::new(RayCamera::from(&self.camera));
-            println!("frames: {}", ray_camera.frame);
-
-            self.camera_buffer = Some(
-                Buffer::from_data(
-                    ctx.memory_allocator.clone(),
-                    BufferCreateInfo {
-                        usage: BufferUsage::UNIFORM_BUFFER | BufferUsage::TRANSFER_DST,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                            | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    },
-                    *ray_camera,
-                )
-                .unwrap(),
-            );
+        if self.camera.update_camera() {
+            self.camera
+                .update_buffer(ctx.builder.as_mut().unwrap())
+                .unwrap();
 
             if let Some(tlas) = self.tlas.as_ref() {
                 self.descriptor_set = Some(
                     DescriptorSet::new(
-                        ctx.descriptor_set_allocator.clone(),
+                        self.vulkan_instance.descriptor_set_allocator(),
                         ctx.pipeline_layout.set_layouts()[0].clone(),
                         [
                             WriteDescriptorSet::acceleration_structure(0, tlas.clone()),
-                            WriteDescriptorSet::buffer(
-                                1,
-                                self.camera_buffer.as_ref().unwrap().clone(),
-                            ),
+                            WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
                         ],
                         [],
                     )
@@ -263,7 +248,7 @@ impl SceneManager {
                 .collect::<Vec<Voxel>>();
 
             let voxel_data = Buffer::from_iter(
-                ctx.memory_allocator.clone(),
+                self.vulkan_instance.memory_allocator(),
                 BufferCreateInfo {
                     usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                     ..Default::default()
@@ -278,7 +263,7 @@ impl SceneManager {
             .unwrap();
 
             let material_data = Buffer::from_iter(
-                ctx.memory_allocator.clone(),
+                self.vulkan_instance.memory_allocator(),
                 BufferCreateInfo {
                     usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                     ..Default::default()
@@ -293,7 +278,7 @@ impl SceneManager {
             .unwrap();
 
             let voxel_buffer = Buffer::from_iter(
-                ctx.memory_allocator.clone(),
+                self.vulkan_instance.memory_allocator(),
                 BufferCreateInfo {
                     usage: BufferUsage::STORAGE_BUFFER
                         | BufferUsage::SHADER_DEVICE_ADDRESS
@@ -317,10 +302,10 @@ impl SceneManager {
             self.blas = Some(unsafe {
                 build_acceleration_structure_voxels(
                     &voxel_buffer,
-                    ctx.memory_allocator.clone(),
-                    ctx.command_buffer_allocator.clone(),
-                    ctx.device.clone(),
-                    ctx.queue.clone(),
+                    self.vulkan_instance.memory_allocator(),
+                    self.vulkan_instance.command_buffer_allocator(),
+                    self.vulkan_instance.device(),
+                    self.vulkan_instance.queue(),
                 )
             });
             self.tlas = Some(unsafe {
@@ -334,22 +319,22 @@ impl SceneManager {
                             .into(),
                         ..Default::default()
                     }],
-                    ctx.memory_allocator.clone(),
-                    ctx.command_buffer_allocator.clone(),
-                    ctx.device.clone(),
-                    ctx.queue.clone(),
+                    self.vulkan_instance.memory_allocator(),
+                    self.vulkan_instance.command_buffer_allocator(),
+                    self.vulkan_instance.device(),
+                    self.vulkan_instance.queue(),
                 )
             });
             self.descriptor_set = Some(
                 DescriptorSet::new(
-                    ctx.descriptor_set_allocator.clone(),
+                    self.vulkan_instance.descriptor_set_allocator(),
                     ctx.pipeline_layout.set_layouts()[0].clone(),
                     [
                         WriteDescriptorSet::acceleration_structure(
                             0,
                             self.tlas.as_ref().unwrap().clone(),
                         ),
-                        WriteDescriptorSet::buffer(1, self.camera_buffer.as_ref().unwrap().clone()),
+                        WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
                     ],
                     [],
                 )
@@ -358,7 +343,7 @@ impl SceneManager {
 
             self.intersect_descriptor_set = Some(
                 DescriptorSet::new(
-                    ctx.descriptor_set_allocator.clone(),
+                    self.vulkan_instance.descriptor_set_allocator(),
                     ctx.pipeline_layout.set_layouts()[2].clone(),
                     [
                         WriteDescriptorSet::buffer(0, voxel_data.clone()),
@@ -371,7 +356,7 @@ impl SceneManager {
         }
 
         let sky_color_buffer = Buffer::from_data(
-            ctx.memory_allocator.clone(),
+            self.vulkan_instance.memory_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                 ..Default::default()
@@ -386,7 +371,7 @@ impl SceneManager {
         .unwrap();
 
         let light_buffer = Buffer::from_data(
-            ctx.memory_allocator.clone(),
+            self.vulkan_instance.memory_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::UNIFORM_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                 ..Default::default()
@@ -401,7 +386,7 @@ impl SceneManager {
         .unwrap();
 
         let sky_color_descriptor_set = DescriptorSet::new(
-            ctx.descriptor_set_allocator.clone(),
+            self.vulkan_instance.descriptor_set_allocator(),
             ctx.pipeline_layout.set_layouts()[3].clone(),
             [
                 WriteDescriptorSet::buffer(0, sky_color_buffer),
@@ -487,31 +472,27 @@ impl SceneManager {
         graphics_ctx: &mut GraphicsContext,
         delta: f32,
     ) -> bool {
-        self.camera.frame += 1;
-        self.update_camera = true;
         let mut new_scene = None;
 
         for command in commands {
             match command {
                 RunCommand::SetCamera(camera) => {
-                    self.camera = camera;
-                    self.update_camera = true;
+                    // TODO
                 }
                 RunCommand::MoveCamera(movement, speed) => {
                     let movement = movement.normalize_or_zero();
-                    self.update_camera = true;
                     let (scale, rotation, mut translation) =
-                        self.camera.view.to_scale_rotation_translation();
+                        self.camera.view().to_scale_rotation_translation();
                     translation -= (rotation * (rotation * movement)) * speed * delta;
-                    self.camera.view =
-                        Mat4::from_scale_rotation_translation(scale, rotation, translation);
-                    self.camera.frame = 0;
+                    self.camera.set_view(Mat4::from_scale_rotation_translation(
+                        scale,
+                        rotation,
+                        translation,
+                    ));
                 }
                 RunCommand::RotateCamera(yaw, pitch) => {
-                    self.update_camera = true;
-                    self.camera.frame = 0;
                     let (scale, rotation, translation) =
-                        self.camera.view.to_scale_rotation_translation();
+                        self.camera.view().to_scale_rotation_translation();
 
                     let direction = Vec3::new(
                         yaw.cos() * pitch.cos(),
@@ -520,14 +501,15 @@ impl SceneManager {
                     )
                     .normalize();
 
-                    self.camera.view =
-                        Mat4::look_at_rh(translation, translation + direction, Vec3::NEG_Y);
+                    self.camera.set_view(Mat4::look_at_rh(
+                        translation,
+                        translation + direction,
+                        Vec3::NEG_Y,
+                    ));
                 }
                 RunCommand::CameraConfig(aperture, focus_distance) => {
-                    self.update_camera = true;
-                    self.camera.frame = 0;
-                    self.camera.aperture = aperture;
-                    self.camera.focus_distance = focus_distance;
+                    self.camera.set_aperture(aperture);
+                    self.camera.set_focus_distance(focus_distance);
                 }
                 RunCommand::Exit => return true,
                 RunCommand::SkyColor(color) => self.sky_color = color,
@@ -548,14 +530,10 @@ impl SceneManager {
                         .unwrap();
                 }
                 RunCommand::Samples(samples) => {
-                    self.camera.samples = samples;
-                    self.camera.frame = 0;
-                    self.update_camera = true;
+                    self.camera.set_samples(samples);
                 }
                 RunCommand::Bounces(bounces) => {
-                    self.camera.bounces = bounces;
-                    self.camera.frame = 0;
-                    self.update_camera = true;
+                    self.camera.set_bounces(bounces);
                 }
                 RunCommand::VoxelMaterial(id, material) => {
                     self.voxel_library.new_material(id, material)
@@ -568,8 +546,7 @@ impl SceneManager {
 
         if let Some(scene) = new_scene {
             self.current_scene = scene;
-            self.update_camera = true;
-            self.camera.frame = 0;
+            // TODO: self.update_camera = true;
         }
 
         false

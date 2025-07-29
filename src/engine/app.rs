@@ -1,6 +1,8 @@
 use crate::engine::context::GraphicsContext;
 use crate::scene::{Scene, SceneManager};
 use crate::voxel::VoxelLibrary;
+use crate::vulkan_instance::VulkanInstance;
+use std::sync::Arc;
 use std::time::Instant;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
 use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo, acquire_next_image};
@@ -15,10 +17,9 @@ use winit::window::{WindowAttributes, WindowId};
 pub struct App {
     context: Option<GraphicsContext>,
     window_attributes: WindowAttributes,
-    app_name: String,
-    app_version: Version,
     scene_manager: SceneManager,
     last_delta: Instant,
+    vulkan_instance: Arc<VulkanInstance>,
 }
 
 impl App {
@@ -29,13 +30,15 @@ impl App {
         main_scene: Box<dyn Scene>,
         voxel_library: VoxelLibrary,
     ) -> Self {
+        let vulkan_instance =
+            Arc::new(VulkanInstance::new(Some(app_name.into()), app_version.into()).unwrap());
+
         Self {
-            window_attributes,
-            app_name: app_name.into(),
-            app_version: app_version.into(),
+            scene_manager: SceneManager::new(vulkan_instance.clone(), main_scene, voxel_library),
             context: None,
-            scene_manager: SceneManager::new(main_scene, voxel_library),
             last_delta: Instant::now(),
+            vulkan_instance,
+            window_attributes,
         }
     }
 }
@@ -43,8 +46,7 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.context = GraphicsContext::new(
-            &self.app_name,
-            &self.app_version,
+            self.vulkan_instance.clone(),
             event_loop,
             self.window_attributes.clone(),
         );
@@ -132,8 +134,8 @@ impl ApplicationHandler for App {
                 }
 
                 let builder = AutoCommandBufferBuilder::primary(
-                    ctx.command_buffer_allocator.clone(),
-                    ctx.queue.queue_family_index(),
+                    self.vulkan_instance.command_buffer_allocator(),
+                    self.vulkan_instance.queue_family_index(),
                     CommandBufferUsage::OneTimeSubmit,
                 )
                 .unwrap();
@@ -152,7 +154,7 @@ impl ApplicationHandler for App {
                     .take()
                     .unwrap()
                     .join(acquire_future)
-                    .then_execute(ctx.queue.clone(), command_buffer)
+                    .then_execute(self.vulkan_instance.queue(), command_buffer)
                     .unwrap();
 
                 let after_future = ctx.gui.draw_on_image(
@@ -162,7 +164,7 @@ impl ApplicationHandler for App {
 
                 let future = after_future
                     .then_swapchain_present(
-                        ctx.queue.clone(),
+                        self.vulkan_instance.queue(),
                         SwapchainPresentInfo::swapchain_image_index(
                             ctx.swapchain.clone(),
                             image_index,
@@ -174,15 +176,13 @@ impl ApplicationHandler for App {
                     Ok(future) => Some(future.boxed()),
                     Err(VulkanError::OutOfDate) => {
                         ctx.recreate_swapchain = true;
-                        Some(sync::now(ctx.device.clone()).boxed())
+                        Some(sync::now(self.vulkan_instance.device()).boxed())
                     }
                     Err(e) => {
                         println!("failed to flush future: {e}");
-                        Some(sync::now(ctx.device.clone()).boxed())
+                        Some(sync::now(self.vulkan_instance.device()).boxed())
                     }
                 };
-
-                println!("render time: {:.2}ms", delta * 1000.0);
 
                 ctx.window.request_redraw();
             }

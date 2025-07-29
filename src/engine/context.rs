@@ -1,7 +1,6 @@
+use crate::vulkan_instance::VulkanInstance;
 use egui_winit_vulkano::{Gui, GuiConfig};
-use glam::Mat4;
 use std::iter;
-use std::ops::Deref;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
     AabbPositions, AccelerationStructure, AccelerationStructureBuildGeometryInfo,
@@ -15,32 +14,22 @@ use vulkano::acceleration_structure::{
 use vulkano::buffer::{
     Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer,
 };
-use vulkano::command_buffer::allocator::{
-    StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
-};
+use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
     PrimaryCommandBufferAbstract,
 };
-use vulkano::descriptor_set::allocator::{
-    DescriptorSetAllocator, StandardDescriptorSetAllocator,
-    StandardDescriptorSetAllocatorCreateInfo,
-};
+use vulkano::descriptor_set::allocator::DescriptorSetAllocator;
 use vulkano::descriptor_set::layout::{
     DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
 };
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::device::physical::PhysicalDeviceType;
-use vulkano::device::{
-    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
-};
+use vulkano::device::{Device, Queue};
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageFormatInfo, ImageUsage, SampleCount};
-use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::allocator::{
-    AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryAllocator, MemoryTypeFilter,
-    StandardMemoryAllocator,
+    AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator,
 };
 use vulkano::pipeline::layout::PipelineLayoutCreateInfo;
 use vulkano::pipeline::ray_tracing::{
@@ -49,74 +38,11 @@ use vulkano::pipeline::ray_tracing::{
 };
 use vulkano::pipeline::{PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::shader::ShaderStages;
-use vulkano::swapchain::{
-    ColorSpace, PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateFlags,
-    SwapchainCreateInfo,
-};
+use vulkano::swapchain::{PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo};
+use vulkano::sync;
 use vulkano::sync::GpuFuture;
-use vulkano::{Version, VulkanLibrary, sync};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes};
-
-#[derive(Clone, Debug)]
-pub struct Camera {
-    pub projection: Mat4,
-    pub view: Mat4,
-    pub aperture: f32,
-    pub focus_distance: f32,
-    pub samples: u32,
-    pub bounces: u32,
-    pub(crate) frame: u32,
-}
-
-impl Camera {
-    pub fn new(
-        projection: Mat4,
-        view: Mat4,
-        aperture: f32,
-        focus_distance: f32,
-        samples: u32,
-        bounces: u32,
-    ) -> Self {
-        Self {
-            projection,
-            view,
-            aperture,
-            focus_distance,
-            samples,
-            bounces,
-            frame: 0,
-        }
-    }
-}
-
-#[derive(Debug, BufferContents, Copy, Clone)]
-#[repr(C)]
-pub struct RayCamera {
-    pub(crate) view_proj: [[f32; 4]; 4],
-    pub(crate) view_inverse: [[f32; 4]; 4],
-    pub(crate) proj_inverse: [[f32; 4]; 4],
-    pub(crate) aperture: f32,
-    pub(crate) focus_distance: f32,
-    pub(crate) samples: u32,
-    pub(crate) bounces: u32,
-    pub(crate) frame: u32,
-}
-
-impl<C: Deref<Target = Camera>> From<C> for RayCamera {
-    fn from(camera: C) -> Self {
-        RayCamera {
-            view_proj: (camera.projection * camera.view).to_cols_array_2d(),
-            view_inverse: camera.view.inverse().to_cols_array_2d(),
-            proj_inverse: camera.projection.inverse().to_cols_array_2d(),
-            aperture: camera.aperture,
-            focus_distance: camera.focus_distance,
-            samples: camera.samples,
-            bounces: camera.bounces,
-            frame: camera.frame,
-        }
-    }
-}
 
 #[derive(Debug, BufferContents, Copy, Clone)]
 #[repr(C)]
@@ -126,17 +52,12 @@ pub struct Light {
 }
 
 pub struct GraphicsContext {
-    instance: Arc<Instance>,
-    pub(crate) device: Arc<Device>,
-    pub(crate) queue: Arc<Queue>,
-    pub(crate) command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    pub(crate) vulkan_instance: Arc<VulkanInstance>,
     pub(crate) window: Arc<Window>,
     pub(crate) swapchain: Arc<Swapchain>,
     pub(crate) previous_frame: Option<Box<dyn GpuFuture>>,
     pub(crate) recreate_swapchain: bool,
-    pub(crate) memory_allocator: Arc<dyn MemoryAllocator>,
     pub(crate) swapchain_image_sets: Vec<(Arc<ImageView>, Arc<DescriptorSet>)>,
-    pub(crate) descriptor_set_allocator: Arc<dyn DescriptorSetAllocator>,
     pub(crate) pipeline_layout: Arc<PipelineLayout>,
     shader_binding_table: ShaderBindingTable,
     pipeline: Arc<RayTracingPipeline>,
@@ -147,119 +68,30 @@ pub struct GraphicsContext {
 
 impl GraphicsContext {
     pub fn new(
-        app_name: &str,
-        app_version: &Version,
+        vulkan_instance: Arc<VulkanInstance>,
         event_loop: &ActiveEventLoop,
         attributes: WindowAttributes,
     ) -> Option<Self> {
         let window = Arc::new(event_loop.create_window(attributes).ok()?);
 
-        let vulkan = VulkanLibrary::new().ok()?;
-        let required_extensions = Surface::required_extensions(event_loop).ok()?;
-        let instance = Instance::new(
-            vulkan,
-            InstanceCreateInfo {
-                application_name: Some(app_name.to_string()),
-                application_version: *app_version,
-                flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
-                enabled_extensions: InstanceExtensions {
-                    ext_swapchain_colorspace: true,
-                    ..required_extensions
-                },
-                ..Default::default()
-            },
-        )
-        .ok()?;
-
-        let device_extensions = DeviceExtensions {
-            khr_swapchain: true,
-            khr_ray_tracing_pipeline: true,
-            khr_ray_tracing_maintenance1: true,
-            khr_synchronization2: true,
-            khr_deferred_host_operations: true,
-            khr_acceleration_structure: true,
-            khr_push_descriptor: true,
-            ..DeviceExtensions::empty()
-        };
-
-        let device_features = DeviceFeatures {
-            acceleration_structure: true,
-            ray_tracing_pipeline: true,
-            buffer_device_address: true,
-            synchronization2: true,
-            ..DeviceFeatures::default()
-        };
-
-        let (physical_device, queue_family_index) = instance
-            .enumerate_physical_devices()
-            .unwrap()
-            .filter(|p| p.api_version() >= Version::V1_3)
-            .filter(|p| {
-                p.supported_extensions().contains(&device_extensions)
-                    && p.supported_features().contains(&device_features)
-            })
-            .filter_map(|p| {
-                p.queue_family_properties()
-                    .iter()
-                    .enumerate()
-                    .position(|(i, q)| {
-                        q.queue_flags
-                            .contains(QueueFlags::GRAPHICS | QueueFlags::COMPUTE)
-                            && p.presentation_support(i as u32, event_loop).unwrap()
-                    })
-                    .map(|i| (p, i as u32))
-            })
-            .min_by_key(|(p, _)| match p.properties().device_type {
-                PhysicalDeviceType::DiscreteGpu => 0,
-                PhysicalDeviceType::IntegratedGpu => 1,
-                PhysicalDeviceType::VirtualGpu => 2,
-                PhysicalDeviceType::Cpu => 3,
-                PhysicalDeviceType::Other => 4,
-                _ => 5,
-            })?;
-
-        println!(
-            "Using device: {} (type: {:?})",
-            physical_device.properties().device_name,
-            physical_device.properties().device_type,
-        );
-
-        let (device, mut queues) = Device::new(
-            physical_device,
-            DeviceCreateInfo {
-                enabled_extensions: device_extensions,
-                queue_create_infos: vec![QueueCreateInfo {
-                    queue_family_index,
-                    ..Default::default()
-                }],
-                enabled_features: device_features,
-                ..Default::default()
-            },
-        )
-        .ok()?;
-
-        let queue = queues.next()?;
-
-        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
-            device.clone(),
-            StandardCommandBufferAllocatorCreateInfo::default(),
-        ));
-
-        let surface = Surface::from_window(instance.clone(), window.clone()).ok()?;
+        let surface = Surface::from_window(vulkan_instance.instance(), window.clone()).ok()?;
         let window_size = window.inner_size();
 
-        let surface_capabilities = device
+        let surface_capabilities = vulkan_instance
+            .device()
             .physical_device()
             .surface_capabilities(&surface, SurfaceInfo::default())
             .ok()?;
 
-        let (image_format, image_color_space) = device
+        let (image_format, image_color_space) = vulkan_instance
+            .device()
             .physical_device()
             .surface_formats(&surface, SurfaceInfo::default())
             .ok()?
             .into_iter()
             .find(|(format, _)| {
-                device
+                vulkan_instance
+                    .device()
                     .physical_device()
                     .image_format_properties(ImageFormatInfo {
                         format: *format,
@@ -273,7 +105,7 @@ impl GraphicsContext {
         let gui = Gui::new(
             event_loop,
             surface.clone(),
-            queue.clone(),
+            vulkan_instance.queue(),
             image_format,
             GuiConfig {
                 samples: SampleCount::Sample1,
@@ -283,7 +115,7 @@ impl GraphicsContext {
         );
 
         let (swapchain, images) = Swapchain::new(
-            device.clone(),
+            vulkan_instance.device(),
             surface,
             SwapchainCreateInfo {
                 min_image_count: surface_capabilities.min_image_count.max(2),
@@ -302,11 +134,11 @@ impl GraphicsContext {
         .ok()?;
 
         let pipeline_layout = PipelineLayout::new(
-            device.clone(),
+            vulkan_instance.device(),
             PipelineLayoutCreateInfo {
                 set_layouts: vec![
                     DescriptorSetLayout::new(
-                        device.clone(),
+                        vulkan_instance.device(),
                         DescriptorSetLayoutCreateInfo {
                             bindings: [
                                 (
@@ -334,7 +166,7 @@ impl GraphicsContext {
                     )
                     .ok()?,
                     DescriptorSetLayout::new(
-                        device.clone(),
+                        vulkan_instance.device(),
                         DescriptorSetLayoutCreateInfo {
                             bindings: [(
                                 0,
@@ -351,7 +183,7 @@ impl GraphicsContext {
                     )
                     .ok()?,
                     DescriptorSetLayout::new(
-                        device.clone(),
+                        vulkan_instance.device(),
                         DescriptorSetLayoutCreateInfo {
                             bindings: [
                                 (
@@ -380,7 +212,7 @@ impl GraphicsContext {
                     )
                     .ok()?,
                     DescriptorSetLayout::new(
-                        device.clone(),
+                        vulkan_instance.device(),
                         DescriptorSetLayoutCreateInfo {
                             bindings: [
                                 (
@@ -413,48 +245,24 @@ impl GraphicsContext {
         )
         .ok()?;
 
-        let sizes = device
-            .physical_device()
-            .memory_properties()
-            .memory_types
-            .iter()
-            .map(|m| {
-                device.physical_device().memory_properties().memory_heaps[m.heap_index as usize]
-                    .size
-            })
-            .collect::<Vec<_>>();
-
-        let memory_allocator = Arc::new(StandardMemoryAllocator::new(
-            device.clone(),
-            GenericMemoryAllocatorCreateInfo {
-                block_sizes: &sizes,
-                ..Default::default()
-            },
-        ));
-
-        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
-            device.clone(),
-            StandardDescriptorSetAllocatorCreateInfo::default(),
-        ));
-
         let pipeline = {
-            let raygen = raygen::load(device.clone())
+            let raygen = raygen::load(vulkan_instance.device())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
-            let closest_hit = raychit::load(device.clone())
+            let closest_hit = raychit::load(vulkan_instance.device())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
-            let miss = raymiss::load(device.clone())
+            let miss = raymiss::load(vulkan_instance.device())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
-            let intersect = rayintersect::load(device.clone())
+            let intersect = rayintersect::load(vulkan_instance.device())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
-            let shadow = rayshadow::load(device.clone())
+            let shadow = rayshadow::load(vulkan_instance.device())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
@@ -479,7 +287,7 @@ impl GraphicsContext {
             ];
 
             RayTracingPipeline::new(
-                device.clone(),
+                vulkan_instance.device(),
                 None,
                 RayTracingPipelineCreateInfo {
                     stages: stages.to_vec().into(),
@@ -494,25 +302,20 @@ impl GraphicsContext {
         let swapchain_image_sets = window_size_dependent_setup(
             images,
             pipeline_layout.clone(),
-            descriptor_set_allocator.clone(),
+            vulkan_instance.descriptor_set_allocator(),
         );
 
         let shader_binding_table =
-            ShaderBindingTable::new(memory_allocator.clone(), &pipeline).unwrap();
+            ShaderBindingTable::new(vulkan_instance.memory_allocator(), &pipeline).unwrap();
 
-        let previous_frame = Some(sync::now(device.clone()).boxed());
+        let previous_frame = Some(sync::now(vulkan_instance.device()).boxed());
 
         Some(Self {
-            instance,
-            device,
-            queue,
-            command_buffer_allocator,
+            vulkan_instance,
             window,
             swapchain,
             previous_frame,
-            memory_allocator,
             swapchain_image_sets,
-            descriptor_set_allocator,
             pipeline_layout,
             shader_binding_table,
             pipeline,
@@ -527,7 +330,7 @@ impl GraphicsContext {
         self.swapchain_image_sets = window_size_dependent_setup(
             images,
             self.pipeline_layout.clone(),
-            self.descriptor_set_allocator.clone(),
+            self.vulkan_instance.descriptor_set_allocator(),
         );
     }
 
