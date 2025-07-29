@@ -127,7 +127,7 @@ impl GraphicsContext {
                     .supported_composite_alpha
                     .into_iter()
                     .next()?,
-                present_mode: PresentMode::Mailbox,
+                present_mode: PresentMode::Immediate,
                 ..Default::default()
             },
         )

@@ -225,6 +225,8 @@ impl VulkanInstance {
 
         #[cfg(target_os = "windows")]
         {
+            use vulkano::VulkanObject;
+
             let fns = instance.fns();
             let support = unsafe {
                 (fns.khr_win32_surface
