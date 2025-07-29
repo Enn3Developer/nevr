@@ -1,5 +1,4 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
 use std::sync::Arc;
 use vulkano::acceleration_structure::AabbPositions;
 
@@ -60,10 +59,10 @@ pub struct Voxel {
 }
 
 impl Voxel {
-    pub fn new(min: Vec3, max: Vec3, material_id: u32) -> Self {
+    pub fn new(min: glm::Vec3, max: glm::Vec3, material_id: u32) -> Self {
         Self {
-            min: min.to_array(),
-            max: max.to_array(),
+            min: [min.x, min.y, min.z],
+            max: [max.x, max.y, max.z],
             material_id,
             _padding_1: 0,
         }
@@ -80,12 +79,12 @@ impl From<Voxel> for AabbPositions {
 }
 
 pub struct VoxelBlock {
-    min: Vec3,
+    min: glm::Vec3,
     voxel_type: Arc<VoxelType>,
 }
 
 impl VoxelBlock {
-    pub fn new(min: Vec3, voxel_type: Arc<VoxelType>) -> Self {
+    pub fn new(min: glm::Vec3, voxel_type: Arc<VoxelType>) -> Self {
         Self { min, voxel_type }
     }
 
@@ -99,7 +98,7 @@ impl VoxelBlock {
             .map(move |(material, pos)| {
                 Voxel::new(
                     self.min + pos * voxel_size,
-                    self.min + (pos + 1.0) * voxel_size,
+                    self.min + (pos.add_scalar(1.0)) * voxel_size,
                     *material,
                 )
             })
@@ -107,11 +106,11 @@ impl VoxelBlock {
 }
 
 pub struct RelativeVoxel {
-    voxels: Vec<(u32, Vec3)>,
+    voxels: Vec<(u32, glm::Vec3)>,
 }
 
 impl RelativeVoxel {
-    pub fn new(voxels: impl IntoIterator<Item = (impl Into<u32>, Vec3)>) -> Self {
+    pub fn new(voxels: impl IntoIterator<Item = (impl Into<u32>, glm::Vec3)>) -> Self {
         Self {
             voxels: voxels
                 .into_iter()
@@ -181,7 +180,7 @@ impl VoxelLibrary {
         }
     }
 
-    pub fn create_block(&self, id: impl Into<u32>, position: Vec3) -> Option<VoxelBlock> {
+    pub fn create_block(&self, id: impl Into<u32>, position: glm::Vec3) -> Option<VoxelBlock> {
         let voxel_type = self.voxels.get(id.into() as usize)?.clone();
 
         Some(VoxelBlock::new(position, voxel_type))

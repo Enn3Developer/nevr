@@ -1,12 +1,11 @@
 use crate::vulkan_instance::VulkanInstance;
-use glam::Mat4;
 use std::ops::Deref;
 use std::sync::Arc;
 use vulkano::buffer::{
     AllocateBufferError, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer,
 };
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CopyBufferInfo, PrimaryAutoCommandBuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::sync::HostAccessError;
 use vulkano::{Validated, ValidationError};
 
@@ -37,8 +36,11 @@ impl From<Box<ValidationError>> for CameraError {
 
 #[derive(Clone, Debug)]
 pub struct Camera {
-    pub projection: Mat4,
-    pub view: Mat4,
+    pub projection: glm::Mat4,
+    pub position: glm::Vec3,
+    pub front: glm::Vec3,
+    pub right: glm::Vec3,
+    pub up: glm::Vec3,
     pub aperture: f32,
     pub focus_distance: f32,
     pub samples: u32,
@@ -47,21 +49,42 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(
-        projection: Mat4,
-        view: Mat4,
+        projection: glm::Mat4,
+        position: glm::Vec3,
+        rotation: glm::Vec2,
         aperture: f32,
         focus_distance: f32,
         samples: u32,
         bounces: u32,
     ) -> Self {
+        let direction = glm::Vec3::new(
+            rotation.x.cos() * rotation.y.cos(),
+            rotation.y.sin(),
+            rotation.x.sin() * rotation.y.cos(),
+        );
+        let up = glm::Vec3::y();
+        let camera_right = glm::normalize(&glm::cross(&up, &direction));
+        let camera_up = glm::cross(&direction, &camera_right);
+
         Self {
             projection,
-            view,
+            position,
+            front: direction,
+            right: camera_right,
+            up: camera_up,
             aperture,
             focus_distance,
             samples,
             bounces,
         }
+    }
+
+    pub fn view(&self) -> glm::Mat4 {
+        glm::look_at(
+            &self.position,
+            &(self.position + self.front),
+            &glm::Vec3::y(),
+        )
     }
 }
 
@@ -148,13 +171,44 @@ impl VoxelCamera {
         self.update_camera
     }
 
-    pub fn view(&self) -> Mat4 {
-        self.camera.view
+    pub fn set_update_camera(&mut self, update_camera: bool) {
+        self.update_camera = update_camera;
     }
 
-    pub fn set_view(&mut self, view: Mat4) {
+    pub fn view(&self) -> glm::Mat4 {
+        self.camera.view()
+    }
+
+    pub fn set_camera(&mut self, camera: Camera) {
         self.update_camera = true;
-        self.camera.view = view;
+        self.camera = camera;
+    }
+
+    pub fn position(&self) -> glm::Vec3 {
+        self.camera.position
+    }
+
+    pub fn set_position(&mut self, position: glm::Vec3) {
+        self.update_camera = true;
+        self.camera.position = position;
+    }
+
+    pub fn front(&self) -> glm::Vec3 {
+        self.camera.front
+    }
+
+    pub fn set_front(&mut self, front: glm::Vec3) {
+        self.update_camera = true;
+        self.camera.front = front;
+    }
+
+    pub fn up(&self) -> glm::Vec3 {
+        self.camera.up
+    }
+
+    pub fn set_view(&mut self, view: glm::Mat4) {
+        self.update_camera = true;
+        // self.camera.view = view;
     }
 
     pub fn set_aperture(&mut self, aperture: f32) {
@@ -193,9 +247,9 @@ pub struct RayCamera {
 impl<C: Deref<Target = Camera>> From<C> for RayCamera {
     fn from(camera: C) -> Self {
         RayCamera {
-            view_proj: (camera.projection * camera.view).to_cols_array_2d(),
-            view_inverse: camera.view.inverse().to_cols_array_2d(),
-            proj_inverse: camera.projection.inverse().to_cols_array_2d(),
+            view_proj: (camera.projection * camera.view()).data.0,
+            view_inverse: glm::inverse(&camera.view()).data.0,
+            proj_inverse: glm::inverse(&camera.projection).data.0,
             aperture: camera.aperture,
             focus_distance: camera.focus_distance,
             samples: camera.samples,

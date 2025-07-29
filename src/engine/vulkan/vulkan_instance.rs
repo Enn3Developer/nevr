@@ -219,7 +219,7 @@ impl VulkanInstance {
     ) -> Result<bool, Validated<HandleError>> {
         #[cfg(target_os = "linux")]
         {
-            // TODO: check for Wayland or X11
+            // TODO: check for Wayland or X11 (needs the window)
             Ok(true)
         }
 

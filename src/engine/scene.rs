@@ -6,7 +6,6 @@ use crate::context::{
 use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
 use crate::vulkan_instance::VulkanInstance;
 use egui_winit_vulkano::Gui;
-use glam::{Mat4, Vec2, Vec3, Vec4};
 use std::cell::RefCell;
 use std::sync::Arc;
 use vulkano::acceleration_structure::{
@@ -21,20 +20,20 @@ use winit::window::CursorGrabMode;
 
 pub trait Scene {
     fn updated_voxels(&mut self) -> bool;
-    fn get_blocks(&self) -> &[(u32, Vec3)];
+    fn get_blocks(&self) -> &[(u32, glm::Vec3)];
     fn update(&mut self, ctx: &RunContext, delta: f32);
     fn ui(&mut self, gui: &mut Gui, ctx: &RunContext, delta: f32);
 }
 
 enum RunCommand {
     SetCamera(Camera),
-    MoveCamera(Vec3, f32),
+    MoveCamera(glm::Vec3, f32),
     RotateCamera(f32, f32),
     CameraConfig(f32, f32),
     Exit,
-    SkyColor(Vec3),
-    AmbientLight(Vec4),
-    LightDirection(Vec4),
+    SkyColor(glm::Vec3),
+    AmbientLight(glm::Vec4),
+    LightDirection(glm::Vec4),
     ChangeScene(Box<dyn Scene>),
     GrabCursor(bool),
     Samples(u32),
@@ -68,7 +67,7 @@ impl<'a> RunContext<'a> {
         self.add_command(RunCommand::SetCamera(camera));
     }
 
-    pub fn move_camera(&self, movement: Vec3, speed: f32) {
+    pub fn move_camera(&self, movement: glm::Vec3, speed: f32) {
         self.add_command(RunCommand::MoveCamera(movement, speed));
     }
 
@@ -84,20 +83,16 @@ impl<'a> RunContext<'a> {
         self.add_command(RunCommand::Exit);
     }
 
-    pub fn change_sky_color(&self, color: Vec3) {
+    pub fn change_sky_color(&self, color: glm::Vec3) {
         self.add_command(RunCommand::SkyColor(color));
     }
 
-    pub fn change_ambient_light(&self, color: Vec4) {
+    pub fn change_ambient_light(&self, color: glm::Vec4) {
         self.add_command(RunCommand::AmbientLight(color));
     }
 
-    pub fn change_light_direction(&self, mut direction: Vec4) {
-        if !direction.is_normalized() {
-            direction = direction.normalize_or_zero();
-        }
-
-        self.add_command(RunCommand::LightDirection(direction));
+    pub fn change_light_direction(&self, direction: glm::Vec4) {
+        self.add_command(RunCommand::LightDirection(direction.normalize()));
     }
 
     pub fn change_scene(&self, scene: impl Scene + 'static) {
@@ -128,7 +123,7 @@ impl<'a> RunContext<'a> {
 pub struct InputState {
     keys: Vec<KeyCode>,
     buttons: Vec<MouseButton>,
-    mouse_movement: Vec2,
+    mouse_movement: glm::Vec2,
 }
 
 impl InputState {
@@ -136,7 +131,7 @@ impl InputState {
         Self {
             keys: vec![],
             buttons: vec![],
-            mouse_movement: Vec2::ZERO,
+            mouse_movement: glm::Vec2::zeros(),
         }
     }
 
@@ -148,7 +143,7 @@ impl InputState {
         self.buttons.contains(&button)
     }
 
-    pub fn mouse_movement(&self) -> Vec2 {
+    pub fn mouse_movement(&self) -> glm::Vec2 {
         self.mouse_movement
     }
 }
@@ -158,7 +153,7 @@ pub struct SceneManager {
     current_scene: Box<dyn Scene>,
     voxel_library: VoxelLibrary,
     camera: VoxelCamera,
-    sky_color: Vec3,
+    sky_color: glm::Vec3,
     light: Light,
     blas: Option<Arc<AccelerationStructure>>,
     tlas: Option<Arc<AccelerationStructure>>,
@@ -173,27 +168,30 @@ impl SceneManager {
         scene: Box<dyn Scene>,
         voxel_library: VoxelLibrary,
     ) -> Self {
-        let proj = Mat4::perspective_rh(90.0_f32.to_radians(), 16.0 / 9.0, 0.001, 1000.0);
-        let view = Mat4::look_at_rh(
-            Vec3::new(0.0, 2.0, 0.0),
-            Vec3::new(1.0, 2.0, 0.0),
-            Vec3::new(0.0, -1.0, 0.0),
-        );
+        let mut proj = glm::Mat4::new_perspective(16.0 / 9.0, 90.0_f32.to_radians(), 0.001, 1000.0);
+        proj.m22 *= -1.0;
 
-        let camera = Camera {
-            aperture: 0.0,
-            focus_distance: 3.4,
-            projection: proj,
-            view,
-            samples: 20,
-            bounces: 10,
-        };
+        let camera = Camera::new(
+            proj,
+            glm::Vec3::new(-8.0, 2.0, 2.0),
+            glm::Vec2::new(0.0, 0.0),
+            0.0,
+            3.4,
+            20,
+            10,
+        );
 
         let camera = VoxelCamera::new(camera, vulkan_instance.clone()).unwrap();
 
+        let light_direction = glm::Vec4::new(-0.75, -1.0, 0.0, 0.0).normalize();
         let light = Light {
-            ambient_light: Vec4::new(0.3, 0.3, 0.3, 0.0).to_array(),
-            light_direction: Vec4::new(-0.75, -1.0, 0.0, 0.0).normalize().to_array(),
+            ambient_light: [0.3, 0.3, 0.3, 0.0],
+            light_direction: [
+                light_direction.x,
+                light_direction.y,
+                light_direction.z,
+                light_direction.w,
+            ],
         };
 
         Self {
@@ -207,7 +205,7 @@ impl SceneManager {
             descriptor_set: None,
             intersect_descriptor_set: None,
             input_state: InputState::new(),
-            sky_color: Vec3::new(0.5, 0.7, 1.0),
+            sky_color: glm::Vec3::new(0.5, 0.7, 1.0),
         }
     }
 
@@ -366,7 +364,7 @@ impl SceneManager {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            self.sky_color.to_array(),
+            [self.sky_color.x, self.sky_color.y, self.sky_color.z],
         )
         .unwrap();
 
@@ -453,7 +451,7 @@ impl SceneManager {
     }
 
     pub fn input_mouse_movement(&mut self, delta: (f32, f32)) {
-        self.input_state.mouse_movement += Vec2::new(delta.0, delta.1);
+        self.input_state.mouse_movement += glm::Vec2::new(delta.0, delta.1);
     }
 
     pub fn update(&mut self, graphics_ctx: &mut GraphicsContext, delta: f32) -> bool {
@@ -462,7 +460,7 @@ impl SceneManager {
 
         let result = self.parse_commands(ctx.commands.take(), graphics_ctx, delta);
 
-        self.input_state.mouse_movement = Vec2::ZERO;
+        self.input_state.mouse_movement = glm::Vec2::zeros();
         result
     }
 
@@ -476,36 +474,27 @@ impl SceneManager {
 
         for command in commands {
             match command {
-                RunCommand::SetCamera(camera) => {
-                    // TODO
-                }
+                RunCommand::SetCamera(camera) => self.camera.set_camera(camera),
                 RunCommand::MoveCamera(movement, speed) => {
-                    let movement = movement.normalize_or_zero();
-                    let (scale, rotation, mut translation) =
-                        self.camera.view().to_scale_rotation_translation();
-                    translation -= (rotation * (rotation * movement)) * speed * delta;
-                    self.camera.set_view(Mat4::from_scale_rotation_translation(
-                        scale,
-                        rotation,
-                        translation,
-                    ));
+                    let movement = movement.normalize();
+                    let mut position = self.camera.position();
+                    position += speed * delta * movement.z * self.camera.front();
+                    position += speed
+                        * delta
+                        * movement.x
+                        * glm::normalize(&glm::cross(&self.camera.front(), &self.camera.up()));
+                    self.camera.set_position(position);
                 }
+                #[allow(unused_variables)]
                 RunCommand::RotateCamera(yaw, pitch) => {
-                    let (scale, rotation, translation) =
-                        self.camera.view().to_scale_rotation_translation();
-
-                    let direction = Vec3::new(
+                    let direction = glm::Vec3::new(
                         yaw.cos() * pitch.cos(),
                         pitch.sin(),
                         yaw.sin() * pitch.cos(),
                     )
                     .normalize();
 
-                    self.camera.set_view(Mat4::look_at_rh(
-                        translation,
-                        translation + direction,
-                        Vec3::NEG_Y,
-                    ));
+                    self.camera.set_front(direction);
                 }
                 RunCommand::CameraConfig(aperture, focus_distance) => {
                     self.camera.set_aperture(aperture);
@@ -513,9 +502,12 @@ impl SceneManager {
                 }
                 RunCommand::Exit => return true,
                 RunCommand::SkyColor(color) => self.sky_color = color,
-                RunCommand::AmbientLight(color) => self.light.ambient_light = color.to_array(),
+                RunCommand::AmbientLight(color) => {
+                    self.light.ambient_light = [color.x, color.y, color.z, color.w]
+                }
                 RunCommand::LightDirection(direction) => {
-                    self.light.light_direction = direction.to_array()
+                    self.light.light_direction =
+                        [direction.x, direction.y, direction.z, direction.w]
                 }
                 RunCommand::ChangeScene(scene) => new_scene = Some(scene),
                 RunCommand::GrabCursor(grab_cursor) => {
@@ -546,7 +538,7 @@ impl SceneManager {
 
         if let Some(scene) = new_scene {
             self.current_scene = scene;
-            // TODO: self.update_camera = true;
+            self.camera.set_update_camera(true);
         }
 
         false
