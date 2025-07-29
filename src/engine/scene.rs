@@ -1,16 +1,11 @@
 use crate::camera::{Camera, VoxelCamera};
-use crate::context::{
-    GraphicsContext, Light, build_acceleration_structure_voxels,
-    build_top_level_acceleration_structure,
-};
-use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
+use crate::context::{GraphicsContext, Light};
+use crate::voxel::{VoxelLibrary, VoxelMaterial, VoxelType};
 use crate::vulkan_instance::VulkanInstance;
+use crate::world::VoxelWorld;
 use egui_winit_vulkano::Gui;
 use std::cell::RefCell;
 use std::sync::Arc;
-use vulkano::acceleration_structure::{
-    AabbPositions, AccelerationStructure, AccelerationStructureInstance,
-};
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
@@ -151,12 +146,10 @@ impl InputState {
 pub struct SceneManager {
     vulkan_instance: Arc<VulkanInstance>,
     current_scene: Box<dyn Scene>,
-    voxel_library: VoxelLibrary,
+    voxel_world: VoxelWorld,
     camera: VoxelCamera,
     sky_color: glm::Vec3,
     light: Light,
-    blas: Option<Arc<AccelerationStructure>>,
-    tlas: Option<Arc<AccelerationStructure>>,
     descriptor_set: Option<Arc<DescriptorSet>>,
     intersect_descriptor_set: Option<Arc<DescriptorSet>>,
     input_state: InputState,
@@ -194,14 +187,14 @@ impl SceneManager {
             ],
         };
 
+        let voxel_world = VoxelWorld::new(vulkan_instance.clone(), voxel_library);
+
         Self {
             vulkan_instance,
-            voxel_library,
+            voxel_world,
             camera,
             light,
             current_scene: scene,
-            blas: None,
-            tlas: None,
             descriptor_set: None,
             intersect_descriptor_set: None,
             input_state: InputState::new(),
@@ -215,13 +208,13 @@ impl SceneManager {
                 .update_buffer(ctx.builder.as_mut().unwrap())
                 .unwrap();
 
-            if let Some(tlas) = self.tlas.as_ref() {
+            if self.voxel_world.has_tlas() {
                 self.descriptor_set = Some(
                     DescriptorSet::new(
                         self.vulkan_instance.descriptor_set_allocator(),
                         ctx.pipeline_layout.set_layouts()[0].clone(),
                         [
-                            WriteDescriptorSet::acceleration_structure(0, tlas.clone()),
+                            WriteDescriptorSet::acceleration_structure(0, self.voxel_world.tlas()),
                             WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
                         ],
                         [],
@@ -232,106 +225,16 @@ impl SceneManager {
         }
 
         if self.current_scene.updated_voxels() {
-            let blocks = self
-                .current_scene
-                .get_blocks()
-                .iter()
-                .map(|(id, pos)| self.voxel_library.create_block(*id, *pos).unwrap())
-                .collect::<Vec<_>>();
+            let (material_data, voxel_data) = self
+                .voxel_world
+                .update(self.current_scene.get_blocks().to_vec());
 
-            let voxels = blocks
-                .iter()
-                .map(|block| block.voxel_array())
-                .flatten()
-                .collect::<Vec<Voxel>>();
-
-            let voxel_data = Buffer::from_iter(
-                self.vulkan_instance.memory_allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                voxels.clone(),
-            )
-            .unwrap();
-
-            let material_data = Buffer::from_iter(
-                self.vulkan_instance.memory_allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                self.voxel_library.materials.clone(),
-            )
-            .unwrap();
-
-            let voxel_buffer = Buffer::from_iter(
-                self.vulkan_instance.memory_allocator(),
-                BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER
-                        | BufferUsage::SHADER_DEVICE_ADDRESS
-                        | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                voxels.clone().into_iter().map(|v| AabbPositions::from(v)),
-            )
-            .unwrap();
-
-            // Build the bottom-level acceleration structure and then the top-level acceleration
-            // structure. Acceleration structures are used to accelerate ray tracing. The bottom-level
-            // acceleration structure contains the geometry data. The top-level acceleration structure
-            // contains the instances of the bottom-level acceleration structures. In our shader, we
-            // will trace rays against the top-level acceleration structure.
-            self.blas = Some(unsafe {
-                build_acceleration_structure_voxels(
-                    &voxel_buffer,
-                    self.vulkan_instance.memory_allocator(),
-                    self.vulkan_instance.command_buffer_allocator(),
-                    self.vulkan_instance.device(),
-                    self.vulkan_instance.queue(),
-                )
-            });
-            self.tlas = Some(unsafe {
-                build_top_level_acceleration_structure(
-                    vec![AccelerationStructureInstance {
-                        acceleration_structure_reference: self
-                            .blas
-                            .as_ref()
-                            .unwrap()
-                            .device_address()
-                            .into(),
-                        ..Default::default()
-                    }],
-                    self.vulkan_instance.memory_allocator(),
-                    self.vulkan_instance.command_buffer_allocator(),
-                    self.vulkan_instance.device(),
-                    self.vulkan_instance.queue(),
-                )
-            });
             self.descriptor_set = Some(
                 DescriptorSet::new(
                     self.vulkan_instance.descriptor_set_allocator(),
                     ctx.pipeline_layout.set_layouts()[0].clone(),
                     [
-                        WriteDescriptorSet::acceleration_structure(
-                            0,
-                            self.tlas.as_ref().unwrap().clone(),
-                        ),
+                        WriteDescriptorSet::acceleration_structure(0, self.voxel_world.tlas()),
                         WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
                     ],
                     [],
@@ -528,11 +431,9 @@ impl SceneManager {
                     self.camera.set_bounces(bounces);
                 }
                 RunCommand::VoxelMaterial(id, material) => {
-                    self.voxel_library.new_material(id, material)
+                    self.voxel_world.new_material(id, material)
                 }
-                RunCommand::VoxelType(id, voxel_type) => {
-                    self.voxel_library.new_type(id, voxel_type)
-                }
+                RunCommand::VoxelType(id, voxel_type) => self.voxel_world.new_type(id, voxel_type),
             }
         }
 

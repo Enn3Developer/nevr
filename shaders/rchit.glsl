@@ -49,7 +49,7 @@ vec3 compute_normal(vec3 hitPos, vec3 aabbMin, vec3 aabbMax) {
 
 void main() {
     vec3 hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
-    Voxel voxel = allVoxels[gl_PrimitiveID];
+    Voxel voxel = allVoxels[gl_InstanceCustomIndexEXT * 8192 + gl_PrimitiveID];
     Material material = allMaterials[voxel.material_id];
     vec3 normal = compute_normal(hitPos, voxel.minimum, voxel.maximum);
 

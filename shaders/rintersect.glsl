@@ -41,7 +41,7 @@ void main() {
     ray.origin = gl_WorldRayOriginEXT;
     ray.direction = gl_WorldRayDirectionEXT;
 
-    Voxel voxel = allVoxels[gl_PrimitiveID];
+    Voxel voxel = allVoxels[gl_InstanceCustomIndexEXT * 8192 + gl_PrimitiveID];
 
     vec2 t = intersectAABB(ray, voxel.minimum, voxel.maximum);
 
