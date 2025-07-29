@@ -57,6 +57,11 @@ impl VulkanInstance {
             ..InstanceExtensions::empty()
         };
 
+        #[cfg(debug_assertions)]
+        let layers = vec!["VK_LAYER_KHRONOS_validation".to_string()];
+        #[cfg(not(debug_assertions))]
+        let layers = vec![];
+
         let instance = Instance::new(
             vulkan,
             InstanceCreateInfo {
@@ -68,6 +73,7 @@ impl VulkanInstance {
                     ext_swapchain_colorspace: true,
                     ..required_extensions
                 },
+                enabled_layers: layers,
                 ..Default::default()
             },
         )

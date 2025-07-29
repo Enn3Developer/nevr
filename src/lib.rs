@@ -7,3 +7,7 @@ extern crate nalgebra_glm as glm;
 pub mod math {
     pub use glm::*;
 }
+
+pub mod window {
+    pub use winit::*;
+}

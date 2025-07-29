@@ -410,14 +410,6 @@ mod rayshadow {
     }
 }
 
-// mod raymiss_shadow {
-//     vulkano_shaders::shader! {
-//         ty: "miss",
-//         path: "./shaders/shader_shadow.rmiss",
-//         vulkan_version: "1.3"
-//     }
-// }
-
 /// This function is called once during initialization, then again whenever the window is resized.
 fn window_size_dependent_setup(
     images: Vec<Arc<Image>>,

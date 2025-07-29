@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 vulkano = "0.35.1"
 vulkano-shaders = "0.35.0"
-winit = { version = "0.30.11", features = ["rwh_06"] }
+winit = { version = "0.30.11", default-features = false, features = ["rwh_06"] }
 nalgebra-glm = "0.19.0"
 bytemuck = "1.23.1"
-egui_winit_vulkano = "0.28.0"
+egui_winit_vulkano = { version = "0.28.0", default-features = false, features = ["links", "image", "clipboard", "x11"] }

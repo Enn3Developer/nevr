@@ -123,7 +123,6 @@ impl ApplicationHandler for App {
                     Ok(r) => r,
                     Err(VulkanError::OutOfDate) => {
                         ctx.recreate_swapchain = true;
-                        println!("out of date");
                         return;
                     }
                     Err(e) => panic!("failed to acquire next image: {e}"),
