@@ -14,7 +14,7 @@ use vulkano::memory::allocator::{
     FreeListAllocator, GenericMemoryAllocator, GenericMemoryAllocatorCreateInfo,
     StandardMemoryAllocator,
 };
-use vulkano::{Validated, Version, VulkanLibrary};
+use vulkano::{DeviceSize, Validated, Version, VulkanLibrary};
 use winit::raw_window_handle::HandleError;
 
 pub struct VulkanInstance {
@@ -154,6 +154,10 @@ impl VulkanInstance {
             StandardCommandBufferAllocatorCreateInfo::default(),
         ));
 
+        const LARGE_HEAP_THRESHOLD: DeviceSize = 1024 * 1024 * 1024;
+        const LARGE_HEAP: DeviceSize = 256 * 1024;
+        const SMALL_HEAP: DeviceSize = 64 * 1024;
+
         let sizes = device
             .physical_device()
             .memory_properties()
@@ -162,6 +166,13 @@ impl VulkanInstance {
             .map(|m| {
                 device.physical_device().memory_properties().memory_heaps[m.heap_index as usize]
                     .size
+            })
+            .map(|size| {
+                if size >= LARGE_HEAP_THRESHOLD {
+                    LARGE_HEAP
+                } else {
+                    SMALL_HEAP
+                }
             })
             .collect::<Vec<_>>();
 
