@@ -100,7 +100,7 @@ impl Default for VoxelCamera {
             glm::Vec2::new(0.0, 0.0),
             0.0,
             3.4,
-            20,
+            5,
             10,
         )
     }
