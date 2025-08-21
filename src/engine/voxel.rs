@@ -1,3 +1,4 @@
+use bevy::prelude::Resource;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 use vulkano::acceleration_structure::AabbPositions;
@@ -46,6 +47,27 @@ impl VoxelMaterial {
             material_model: material_model.into(),
             _diffuse_texture_id: -1,
         }
+    }
+
+    pub fn new_lambertian(diffuse: [f32; 4]) -> Self {
+        Self::new(diffuse, 0.0, 0.0, MaterialModel::Lambertian)
+    }
+
+    pub fn new_metallic(diffuse: [f32; 4], fuzziness: f32) -> Self {
+        Self::new(diffuse, fuzziness, 0.0, MaterialModel::Metallic)
+    }
+
+    pub fn new_dielectric(diffuse: [f32; 4], refraction_index: f32) -> Self {
+        Self::new(diffuse, 0.0, refraction_index, MaterialModel::Dielectric)
+    }
+
+    pub fn new_diffuse_light(mut diffuse: [f32; 4], brightness: f32) -> Self {
+        diffuse[0] *= brightness;
+        diffuse[1] *= brightness;
+        diffuse[2] *= brightness;
+        diffuse[3] *= brightness;
+
+        Self::new(diffuse, 0.0, 0.0, MaterialModel::DiffuseLight)
     }
 }
 
@@ -134,6 +156,7 @@ impl VoxelType {
     }
 }
 
+#[derive(Resource)]
 pub struct VoxelLibrary {
     voxels: Vec<Arc<VoxelType>>,
     pub(crate) materials: Vec<VoxelMaterial>,

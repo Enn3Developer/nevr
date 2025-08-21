@@ -1,4 +1,4 @@
-use crate::camera::{Camera, VoxelCamera};
+use crate::camera::{VoxelCamera, VoxelCameraData};
 use crate::context::{GraphicsContext, Light};
 use crate::voxel::{VoxelLibrary, VoxelMaterial, VoxelType};
 use crate::vulkan_instance::VulkanInstance;
@@ -21,7 +21,7 @@ pub trait Scene {
 }
 
 enum RunCommand {
-    SetCamera(Camera),
+    SetCamera(VoxelCamera),
     MoveCamera(glm::Vec3, f32),
     RotateCamera(f32, f32),
     CameraConfig(f32, f32),
@@ -58,7 +58,7 @@ impl<'a> RunContext<'a> {
         self.commands.borrow_mut().push(command);
     }
 
-    pub fn set_camera(&self, camera: Camera) {
+    pub fn set_camera(&self, camera: VoxelCamera) {
         self.add_command(RunCommand::SetCamera(camera));
     }
 
@@ -147,7 +147,7 @@ pub struct SceneManager {
     vulkan_instance: Arc<VulkanInstance>,
     current_scene: Box<dyn Scene>,
     voxel_world: VoxelWorld,
-    camera: VoxelCamera,
+    camera: VoxelCameraData,
     sky_color: glm::Vec3,
     light: Light,
     descriptor_set: Option<Arc<DescriptorSet>>,
@@ -164,7 +164,7 @@ impl SceneManager {
         let mut proj = glm::Mat4::new_perspective(16.0 / 9.0, 90.0_f32.to_radians(), 0.001, 1000.0);
         proj.m22 *= -1.0;
 
-        let camera = Camera::new(
+        let camera = VoxelCamera::new(
             proj,
             glm::Vec3::new(-8.0, 2.0, 2.0),
             glm::Vec2::new(0.0, 0.0),
@@ -174,7 +174,7 @@ impl SceneManager {
             10,
         );
 
-        let camera = VoxelCamera::new(camera, vulkan_instance.clone()).unwrap();
+        let camera = VoxelCameraData::new(&camera, &vulkan_instance).unwrap();
 
         let light_direction = glm::Vec4::new(-0.75, -1.0, 0.0, 0.0).normalize();
         let light = Light {
@@ -203,26 +203,26 @@ impl SceneManager {
     }
 
     pub(crate) fn draw(&mut self, ctx: &mut GraphicsContext) {
-        if self.camera.update_camera() {
-            self.camera
-                .update_buffer(ctx.builder.as_mut().unwrap())
-                .unwrap();
+        // if self.camera.update_camera() {
+        //     self.camera
+        //         .update_buffer(ctx.builder.as_mut().unwrap())
+        //         .unwrap();
 
-            if self.voxel_world.has_tlas() {
-                self.descriptor_set = Some(
-                    DescriptorSet::new(
-                        self.vulkan_instance.descriptor_set_allocator(),
-                        ctx.pipeline_layout.set_layouts()[0].clone(),
-                        [
-                            WriteDescriptorSet::acceleration_structure(0, self.voxel_world.tlas()),
-                            WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
-                        ],
-                        [],
-                    )
-                    .unwrap(),
-                );
-            }
-        }
+        //     if self.voxel_world.has_tlas() {
+        //         self.descriptor_set = Some(
+        //             DescriptorSet::new(
+        //                 self.vulkan_instance.descriptor_set_allocator(),
+        //                 ctx.pipeline_layout.set_layouts()[0].clone(),
+        //                 [
+        //                     WriteDescriptorSet::acceleration_structure(0, self.voxel_world.tlas()),
+        //                     WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
+        //                 ],
+        //                 [],
+        //             )
+        //             .unwrap(),
+        //         );
+        //     }
+        // }
 
         if self.current_scene.updated_voxels() {
             let (material_data, voxel_data) = self
@@ -377,32 +377,32 @@ impl SceneManager {
 
         for command in commands {
             match command {
-                RunCommand::SetCamera(camera) => self.camera.set_camera(camera),
-                RunCommand::MoveCamera(movement, speed) => {
-                    let movement = movement.normalize();
-                    let mut position = self.camera.position();
-                    position += speed * delta * movement.z * self.camera.front();
-                    position += speed
-                        * delta
-                        * movement.x
-                        * glm::normalize(&glm::cross(&self.camera.front(), &self.camera.up()));
-                    self.camera.set_position(position);
-                }
-                #[allow(unused_variables)]
-                RunCommand::RotateCamera(yaw, pitch) => {
-                    let direction = glm::Vec3::new(
-                        yaw.cos() * pitch.cos(),
-                        pitch.sin(),
-                        yaw.sin() * pitch.cos(),
-                    )
-                    .normalize();
-
-                    self.camera.set_front(direction);
-                }
-                RunCommand::CameraConfig(aperture, focus_distance) => {
-                    self.camera.set_aperture(aperture);
-                    self.camera.set_focus_distance(focus_distance);
-                }
+                // RunCommand::SetCamera(camera) => self.camera.set_camera(camera),
+                // RunCommand::MoveCamera(movement, speed) => {
+                //     let movement = movement.normalize();
+                //     let mut position = self.camera.position();
+                //     position += speed * delta * movement.z * self.camera.front();
+                //     position += speed
+                //         * delta
+                //         * movement.x
+                //         * glm::normalize(&glm::cross(&self.camera.front(), &self.camera.up()));
+                //     self.camera.set_position(position);
+                // }
+                // #[allow(unused_variables)]
+                // RunCommand::RotateCamera(yaw, pitch) => {
+                //     let direction = glm::Vec3::new(
+                //         yaw.cos() * pitch.cos(),
+                //         pitch.sin(),
+                //         yaw.sin() * pitch.cos(),
+                //     )
+                //     .normalize();
+                //
+                //     self.camera.set_front(direction);
+                // }
+                // RunCommand::CameraConfig(aperture, focus_distance) => {
+                //     self.camera.set_aperture(aperture);
+                //     self.camera.set_focus_distance(focus_distance);
+                // }
                 RunCommand::Exit => return true,
                 RunCommand::SkyColor(color) => self.sky_color = color,
                 RunCommand::AmbientLight(color) => {
@@ -424,22 +424,23 @@ impl SceneManager {
                         })
                         .unwrap();
                 }
-                RunCommand::Samples(samples) => {
-                    self.camera.set_samples(samples);
-                }
-                RunCommand::Bounces(bounces) => {
-                    self.camera.set_bounces(bounces);
-                }
+                // RunCommand::Samples(samples) => {
+                //     self.camera.set_samples(samples);
+                // }
+                // RunCommand::Bounces(bounces) => {
+                //     self.camera.set_bounces(bounces);
+                // }
                 RunCommand::VoxelMaterial(id, material) => {
                     self.voxel_world.new_material(id, material)
                 }
                 RunCommand::VoxelType(id, voxel_type) => self.voxel_world.new_type(id, voxel_type),
+                _ => {}
             }
         }
 
         if let Some(scene) = new_scene {
             self.current_scene = scene;
-            self.camera.set_update_camera(true);
+            // self.camera.set_update_camera(true);
         }
 
         false

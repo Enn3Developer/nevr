@@ -1,4 +1,5 @@
 use crate::vulkan_instance::VulkanInstance;
+use bevy::prelude::Component;
 use std::ops::Deref;
 use std::sync::Arc;
 use vulkano::buffer::{
@@ -34,8 +35,8 @@ impl From<Box<ValidationError>> for CameraError {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Camera {
+#[derive(Clone, Debug, Component)]
+pub struct VoxelCamera {
     pub projection: glm::Mat4,
     pub position: glm::Vec3,
     pub front: glm::Vec3,
@@ -47,7 +48,7 @@ pub struct Camera {
     pub bounces: u32,
 }
 
-impl Camera {
+impl VoxelCamera {
     pub fn new(
         projection: glm::Mat4,
         position: glm::Vec3,
@@ -88,20 +89,35 @@ impl Camera {
     }
 }
 
-pub struct VoxelCamera {
-    vulkan_instance: Arc<VulkanInstance>,
-    camera: Camera,
-    camera_gpu_buffer: Subbuffer<RayCamera>,
-    camera_cpu_buffer: Subbuffer<RayCamera>,
-    update_camera: bool,
+impl Default for VoxelCamera {
+    fn default() -> Self {
+        let mut proj = glm::Mat4::new_perspective(16.0 / 9.0, 90.0_f32.to_radians(), 0.001, 1000.0);
+        proj.m22 *= -1.0;
+
+        Self::new(
+            proj,
+            glm::Vec3::new(-8.0, 2.0, 2.0),
+            glm::Vec2::new(0.0, 0.0),
+            0.0,
+            3.4,
+            20,
+            10,
+        )
+    }
 }
 
-impl VoxelCamera {
+#[derive(Component)]
+pub struct VoxelCameraData {
+    camera_gpu_buffer: Subbuffer<RayCamera>,
+    camera_cpu_buffer: Subbuffer<RayCamera>,
+}
+
+impl VoxelCameraData {
     pub fn new(
-        camera: Camera,
-        vulkan_instance: Arc<VulkanInstance>,
+        camera: &VoxelCamera,
+        vulkan_instance: &VulkanInstance,
     ) -> Result<Self, Validated<AllocateBufferError>> {
-        let ray_camera = RayCamera::from(&camera);
+        let ray_camera = RayCamera::from(camera);
         let camera_gpu_buffer = Buffer::new_sized(
             vulkan_instance.memory_allocator(),
             BufferCreateInfo {
@@ -128,21 +144,20 @@ impl VoxelCamera {
         )?;
 
         Ok(Self {
-            vulkan_instance,
-            camera,
             camera_gpu_buffer,
             camera_cpu_buffer,
-            update_camera: true,
         })
     }
 
     pub fn update_buffer(
         &mut self,
+        vulkan_instance: &VulkanInstance,
         builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        camera: &VoxelCamera,
     ) -> Result<(), CameraError> {
-        let ray_camera = RayCamera::from(&self.camera);
+        let ray_camera = RayCamera::from(camera);
         self.camera_cpu_buffer = Buffer::from_data(
-            self.vulkan_instance.memory_allocator(),
+            vulkan_instance.memory_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::UNIFORM_BUFFER | BufferUsage::TRANSFER_SRC,
                 ..Default::default()
@@ -166,70 +181,6 @@ impl VoxelCamera {
     pub fn camera_gpu_buffer(&self) -> Subbuffer<RayCamera> {
         self.camera_cpu_buffer.clone()
     }
-
-    pub fn update_camera(&self) -> bool {
-        self.update_camera
-    }
-
-    pub fn set_update_camera(&mut self, update_camera: bool) {
-        self.update_camera = update_camera;
-    }
-
-    pub fn view(&self) -> glm::Mat4 {
-        self.camera.view()
-    }
-
-    pub fn set_camera(&mut self, camera: Camera) {
-        self.update_camera = true;
-        self.camera = camera;
-    }
-
-    pub fn position(&self) -> glm::Vec3 {
-        self.camera.position
-    }
-
-    pub fn set_position(&mut self, position: glm::Vec3) {
-        self.update_camera = true;
-        self.camera.position = position;
-    }
-
-    pub fn front(&self) -> glm::Vec3 {
-        self.camera.front
-    }
-
-    pub fn set_front(&mut self, front: glm::Vec3) {
-        self.update_camera = true;
-        self.camera.front = front;
-    }
-
-    pub fn up(&self) -> glm::Vec3 {
-        self.camera.up
-    }
-
-    pub fn set_view(&mut self, view: glm::Mat4) {
-        self.update_camera = true;
-        // self.camera.view = view;
-    }
-
-    pub fn set_aperture(&mut self, aperture: f32) {
-        self.update_camera = true;
-        self.camera.aperture = aperture;
-    }
-
-    pub fn set_focus_distance(&mut self, focus_distance: f32) {
-        self.update_camera = true;
-        self.camera.focus_distance = focus_distance;
-    }
-
-    pub fn set_samples(&mut self, samples: u32) {
-        self.update_camera = true;
-        self.camera.samples = samples;
-    }
-
-    pub fn set_bounces(&mut self, bounces: u32) {
-        self.update_camera = true;
-        self.camera.bounces = bounces;
-    }
 }
 
 #[derive(Debug, BufferContents, Copy, Clone)]
@@ -244,7 +195,7 @@ pub struct RayCamera {
     bounces: u32,
 }
 
-impl<C: Deref<Target = Camera>> From<C> for RayCamera {
+impl<C: Deref<Target = VoxelCamera>> From<C> for RayCamera {
     fn from(camera: C) -> Self {
         RayCamera {
             view_proj: (camera.projection * camera.view()).data.0,

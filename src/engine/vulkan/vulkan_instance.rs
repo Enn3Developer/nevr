@@ -1,3 +1,4 @@
+use bevy::prelude::Resource;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
@@ -17,6 +18,7 @@ use vulkano::memory::allocator::{
 use vulkano::{DeviceSize, Validated, Version, VulkanLibrary};
 use winit::raw_window_handle::HandleError;
 
+#[derive(Resource)]
 pub struct VulkanInstance {
     instance: Arc<Instance>,
     queue_family_index: u32,
