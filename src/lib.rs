@@ -1,3 +1,4 @@
+extern crate nalgebra_glm as glm;
 pub mod engine;
 
 use crate::camera::{VoxelCamera, VoxelCameraData};
@@ -5,12 +6,12 @@ use crate::voxel::VoxelLibrary;
 use crate::vulkan_instance::VulkanInstance;
 use bevy::app::App;
 use bevy::prelude::{
-    Added, Changed, Commands, Entity, IntoScheduleConfigs, Plugin, Query, Res, Update,
+    Added, Changed, Commands, Entity, GlobalTransform, IntoScheduleConfigs, Or, Plugin, Query, Res,
+    Update,
 };
 pub use egui_winit_vulkano::*;
 pub use engine::*;
 
-extern crate nalgebra_glm as glm;
 pub mod math {
     pub use glm::*;
 }
@@ -45,21 +46,29 @@ impl Plugin for NEVRPlugin {
 
 fn init_camera(
     mut commands: Commands,
-    camera_query: Query<(Entity, &VoxelCamera), Added<VoxelCamera>>,
+    camera_query: Query<
+        (Entity, &VoxelCamera, &GlobalTransform),
+        Or<(Added<VoxelCamera>, Added<GlobalTransform>)>,
+    >,
     vulkan_instance: Res<VulkanInstance>,
 ) {
-    for (entity, camera) in camera_query {
+    for (entity, camera, transform) in camera_query {
         commands
             .entity(entity)
-            .insert(VoxelCameraData::new(&camera, &vulkan_instance).unwrap());
+            .insert(VoxelCameraData::new(&camera, transform, &vulkan_instance).unwrap());
     }
 }
 
 fn update_camera(
-    camera_query: Query<(&mut VoxelCameraData, &VoxelCamera), Changed<VoxelCamera>>,
+    camera_query: Query<
+        (&mut VoxelCameraData, &VoxelCamera, &GlobalTransform),
+        Or<(Changed<VoxelCamera>, Changed<GlobalTransform>)>,
+    >,
     vulkan_instance: Res<VulkanInstance>,
 ) {
-    for (camera_data, camera) in camera_query {
-        // TODO:
+    for (mut camera_data, camera, transform) in camera_query {
+        camera_data
+            .update_buffer(&vulkan_instance, camera, transform)
+            .unwrap();
     }
 }

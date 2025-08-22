@@ -3,6 +3,7 @@ use crate::context::{GraphicsContext, Light};
 use crate::voxel::{VoxelLibrary, VoxelMaterial, VoxelType};
 use crate::vulkan_instance::VulkanInstance;
 use crate::world::VoxelWorld;
+use bevy::prelude::PerspectiveProjection;
 use egui_winit_vulkano::Gui;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -161,20 +162,9 @@ impl SceneManager {
         scene: Box<dyn Scene>,
         voxel_library: VoxelLibrary,
     ) -> Self {
-        let mut proj = glm::Mat4::new_perspective(16.0 / 9.0, 90.0_f32.to_radians(), 0.001, 1000.0);
-        proj.m22 *= -1.0;
+        let camera = VoxelCamera::new(PerspectiveProjection::default(), 0.0, 3.4, 20, 10);
 
-        let camera = VoxelCamera::new(
-            proj,
-            glm::Vec3::new(-8.0, 2.0, 2.0),
-            glm::Vec2::new(0.0, 0.0),
-            0.0,
-            3.4,
-            20,
-            10,
-        );
-
-        let camera = VoxelCameraData::new(&camera, &vulkan_instance).unwrap();
+        let camera = VoxelCameraData::new(&camera, todo!(), &vulkan_instance).unwrap();
 
         let light_direction = glm::Vec4::new(-0.75, -1.0, 0.0, 0.0).normalize();
         let light = Light {
