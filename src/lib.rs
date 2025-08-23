@@ -161,7 +161,7 @@ fn render(
     unsafe { builder.trace_rays(vulkan_instance.shader_binding_table_addresses(), extent) }
         .unwrap();
 
-    let buffer: Subbuffer<[f32]> = Buffer::new_unsized(
+    let buffer: Subbuffer<[u8]> = Buffer::new_unsized(
         vulkan_instance.memory_allocator(),
         BufferCreateInfo {
             usage: BufferUsage::TRANSFER_DST,
@@ -172,7 +172,7 @@ fn render(
                 | MemoryTypeFilter::HOST_RANDOM_ACCESS,
             ..Default::default()
         },
-        1920 * 1080 * 4,
+        1920 * 1080 * 4 * 4,
     )
     .unwrap();
 
@@ -194,14 +194,7 @@ fn render(
         .wait(None)
         .unwrap();
 
-    images.get_mut(&render_target.0).unwrap().data = Some(
-        buffer
-            .read()
-            .unwrap()
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect(),
-    );
+    images.get_mut(&render_target.0).unwrap().data = Some(buffer.read().unwrap().to_vec());
 }
 
 fn setup(mut commands: Commands, assets: Res<AssetServer>) {
