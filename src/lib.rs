@@ -194,8 +194,7 @@ fn render(vulkan_instance: Res<VulkanInstance>, descriptor_sets: Res<DescriptorS
     }
 
     println!("saving image");
-    img.save("/home/enn3/test.png")
-        .expect("can't save image to file");
+    img.save("test.png").expect("can't save image to file");
 }
 
 fn init_images(vulkan_instance: Res<VulkanInstance>, mut descriptor_sets: ResMut<DescriptorSets>) {
