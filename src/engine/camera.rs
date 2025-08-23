@@ -1,4 +1,4 @@
-use crate::vulkan_instance::VulkanInstance;
+use crate::engine::vulkan_instance::VulkanInstance;
 use bevy::prelude::{Component, GlobalTransform, Mat4, PerspectiveProjection};
 use std::ops::Deref;
 use vulkano::buffer::{
@@ -79,7 +79,7 @@ impl Default for VoxelCamera {
             0.0,
             3.4,
             5,
-            10,
+            3,
         )
     }
 }

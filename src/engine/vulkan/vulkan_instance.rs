@@ -1,4 +1,4 @@
-use crate::pipeline::{VulkanDescriptorBinding, VulkanDescriptorSet, new_pipeline_layout};
+use crate::engine::pipeline::{VulkanDescriptorBinding, VulkanDescriptorSet, new_pipeline_layout};
 use bevy::prelude::Resource;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::{
@@ -8,7 +8,7 @@ use vulkano::descriptor_set::allocator::{
     StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
 };
 use vulkano::descriptor_set::layout::DescriptorType;
-use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
 };
@@ -23,8 +23,7 @@ use vulkano::pipeline::ray_tracing::{
 };
 use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::shader::ShaderStages;
-use vulkano::{DeviceSize, Validated, Version, VulkanLibrary};
-use winit::raw_window_handle::HandleError;
+use vulkano::{DeviceSize, Version, VulkanLibrary};
 
 #[derive(Resource)]
 pub struct VulkanInstance {
@@ -44,32 +43,6 @@ impl VulkanInstance {
     pub fn new(application_name: Option<String>, application_version: Version) -> Option<Self> {
         let vulkan = VulkanLibrary::new().ok()?;
 
-        #[cfg(target_os = "linux")]
-        let required_extensions = InstanceExtensions {
-            khr_wayland_surface: true,
-            khr_xcb_surface: true,
-            khr_xlib_surface: true,
-            ..InstanceExtensions::empty()
-        };
-
-        #[cfg(target_os = "windows")]
-        let required_extensions = InstanceExtensions {
-            khr_win32_surface: true,
-            ..InstanceExtensions::empty()
-        };
-
-        #[cfg(target_os = "macos")]
-        let required_extensions = InstanceExtensions {
-            ext_metal_surface: true,
-            ..InstanceExtensions::empty()
-        };
-
-        #[cfg(target_os = "android")]
-        let required_extensions = InstanceExtensions {
-            khr_android_surface: true,
-            ..InstanceExtensions::empty()
-        };
-
         #[cfg(debug_assertions)]
         let layers = vec!["VK_LAYER_KHRONOS_validation".to_string()];
         #[cfg(not(debug_assertions))]
@@ -81,11 +54,7 @@ impl VulkanInstance {
                 application_name,
                 application_version,
                 flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
-                enabled_extensions: InstanceExtensions {
-                    khr_surface: true,
-                    ext_swapchain_colorspace: true,
-                    ..required_extensions
-                },
+                enabled_extensions: InstanceExtensions::empty(),
                 enabled_layers: layers,
                 ..Default::default()
             },
@@ -93,7 +62,6 @@ impl VulkanInstance {
         .ok()?;
 
         let device_extensions = DeviceExtensions {
-            khr_swapchain: true,
             khr_ray_tracing_pipeline: true,
             khr_ray_tracing_maintenance1: true,
             khr_synchronization2: true,
@@ -126,8 +94,6 @@ impl VulkanInstance {
                     .position(|(i, q)| {
                         q.queue_flags
                             .contains(QueueFlags::GRAPHICS | QueueFlags::COMPUTE)
-                            && Self::presentation_support(instance.clone(), p.clone(), i as u32)
-                                .unwrap()
                     })
                     .map(|i| (p, i as u32))
             })
@@ -359,45 +325,6 @@ impl VulkanInstance {
 
     pub fn shader_binding_table_addresses(&self) -> ShaderBindingTableAddresses {
         self.shader_binding_table.addresses().clone()
-    }
-
-    #[allow(unused_variables)]
-    fn presentation_support(
-        instance: Arc<Instance>,
-        physical_device: Arc<PhysicalDevice>,
-        queue_family_index: u32,
-    ) -> Result<bool, Validated<HandleError>> {
-        #[cfg(target_os = "linux")]
-        {
-            // TODO: check for Wayland or X11 (needs the window)
-            Ok(true)
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            use vulkano::VulkanObject;
-
-            let fns = instance.fns();
-            let support = unsafe {
-                (fns.khr_win32_surface
-                    .get_physical_device_win32_presentation_support_khr)(
-                    physical_device.handle(),
-                    queue_family_index,
-                )
-            };
-
-            Ok(support != 0)
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            Ok(true)
-        }
-
-        #[cfg(target_os = "android")]
-        {
-            Ok(true)
-        }
     }
 }
 

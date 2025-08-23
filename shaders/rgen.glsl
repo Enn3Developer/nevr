@@ -92,7 +92,7 @@ void main() {
     }
 
     pixelColor = pixelColor / camera.samples;
-    pixelColor = sqrt(pixelColor);
+    // pixelColor = sqrt(pixelColor);
 
     if (false) {
         vec3 old_color = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;

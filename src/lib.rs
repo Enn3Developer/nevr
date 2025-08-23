@@ -1,23 +1,23 @@
-extern crate nalgebra_glm as glm;
 pub mod engine;
 
-use crate::camera::{VoxelCamera, VoxelCameraData};
-use crate::context::Light;
-use crate::voxel::{VoxelBlock, VoxelLibrary};
-use crate::vulkan_instance::VulkanInstance;
-use crate::world::VoxelWorld;
-use ::image::{ImageBuffer, Rgba};
-use bevy::app::App;
+use crate::engine::camera::{VoxelCamera, VoxelCameraData};
+use crate::engine::voxel::{VoxelBlock, VoxelLibrary};
+use crate::engine::vulkan_instance::VulkanInstance;
+use crate::engine::world::VoxelWorld;
+use bevy::app::{App, MainScheduleOrder};
+use bevy::asset::RenderAssetUsages;
+use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::{
-    Changed, Commands, DetectChanges, Entity, EventReader, GlobalTransform, IntoScheduleConfigs,
-    Or, Plugin, PostUpdate, Query, Ref, Res, ResMut, Resource, Startup, Update, Vec3, Vec4,
+    AssetServer, Assets, Camera2d, Changed, Commands, DetectChanges, Entity, EventReader,
+    GlobalTransform, Handle, IntoScheduleConfigs, Or, Plugin, PostUpdate, Query, Ref, Res, ResMut,
+    Resource, Sprite, Startup, Update, Vec3, Vec4,
 };
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::WindowResized;
-pub use egui_winit_vulkano::*;
-pub use engine::*;
 use itertools::Itertools;
 use std::sync::Arc;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::Version;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyImageToBufferInfo,
     PrimaryCommandBufferAbstract,
@@ -30,12 +30,11 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::PipelineBindPoint;
 use vulkano::sync::GpuFuture;
 
-pub mod math {
-    pub use glm::*;
-}
-
-pub mod window {
-    pub use winit::*;
+#[derive(Debug, BufferContents, Copy, Clone)]
+#[repr(C)]
+pub struct Light {
+    pub(crate) ambient_light: [f32; 4],
+    pub(crate) light_direction: [f32; 4],
 }
 
 pub struct NEVRPlugin {
@@ -58,6 +57,9 @@ pub struct DescriptorSets {
     pub image_descriptor_sets: [Option<(Arc<ImageView>, Arc<DescriptorSet>)>; 3],
 }
 
+#[derive(Resource)]
+pub struct VoxelRenderTarget(Handle<bevy::image::Image>);
+
 impl NEVRPlugin {
     pub fn new(name: impl Into<String>, version: impl Into<Version>) -> Self {
         Self {
@@ -67,8 +69,17 @@ impl NEVRPlugin {
     }
 }
 
+#[derive(ScheduleLabel, Hash, Clone, Debug, Eq, PartialEq)]
+pub struct VoxelRender;
+
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
+        let app = app.init_schedule(VoxelRender);
+
+        app.world_mut()
+            .resource_mut::<MainScheduleOrder>()
+            .insert_before(PostUpdate, VoxelRender);
+
         app.insert_resource(
             VulkanInstance::new(Some(self.name.clone()), self.version.clone()).unwrap(),
         )
@@ -80,7 +91,7 @@ impl Plugin for NEVRPlugin {
         .init_resource::<VoxelLibrary>()
         .init_resource::<VoxelWorld>()
         .init_resource::<DescriptorSets>()
-        .add_systems(Startup, init_images)
+        .add_systems(Startup, (init_images, setup))
         .add_systems(
             Update,
             (
@@ -91,11 +102,16 @@ impl Plugin for NEVRPlugin {
                 update_sky,
             ),
         )
-        .add_systems(PostUpdate, render);
+        .add_systems(VoxelRender, render);
     }
 }
 
-fn render(vulkan_instance: Res<VulkanInstance>, descriptor_sets: Res<DescriptorSets>) {
+fn render(
+    vulkan_instance: Res<VulkanInstance>,
+    descriptor_sets: Res<DescriptorSets>,
+    render_target: Res<VoxelRenderTarget>,
+    mut images: ResMut<Assets<bevy::image::Image>>,
+) {
     println!("rendering");
     let mut builder = AutoCommandBufferBuilder::primary(
         vulkan_instance.command_buffer_allocator(),
@@ -178,22 +194,35 @@ fn render(vulkan_instance: Res<VulkanInstance>, descriptor_sets: Res<DescriptorS
         .wait(None)
         .unwrap();
 
-    println!("creating image to save");
-    let mut img = ImageBuffer::new(1920, 1080);
+    images.get_mut(&render_target.0).unwrap().data = Some(
+        buffer
+            .read()
+            .unwrap()
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect(),
+    );
+}
 
-    let buf = buffer.read().unwrap();
-    for (x, y, pixel) in img.enumerate_pixels_mut() {
-        let idx = (y * 1920 * 4 + x * 4) as usize;
-        let r = (buf[idx + 0] * 255.0) as u8;
-        let g = (buf[idx + 1] * 255.0) as u8;
-        let b = (buf[idx + 2] * 255.0) as u8;
-        let a = (buf[idx + 3] * 255.0) as u8;
+fn setup(mut commands: Commands, assets: Res<AssetServer>) {
+    let pixel = (0..4).map(|_| 1.0f32.to_le_bytes()).flatten().collect_vec();
+    let image = bevy::image::Image::new_fill(
+        Extent3d {
+            width: 1920,
+            height: 1080,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &pixel,
+        TextureFormat::Rgba32Float,
+        RenderAssetUsages::default(),
+    );
 
-        *pixel = Rgba([r, g, b, a]);
-    }
+    let image = assets.add(image);
 
-    println!("saving image");
-    img.save("test.png").expect("can't save image to file");
+    commands.spawn(Camera2d::default());
+    commands.spawn(Sprite::from_image(image.clone()));
+    commands.insert_resource(VoxelRenderTarget(image));
 }
 
 fn init_images(vulkan_instance: Res<VulkanInstance>, mut descriptor_sets: ResMut<DescriptorSets>) {
@@ -237,13 +266,10 @@ fn init_camera(
     camera_query: Query<(Entity, Ref<VoxelCamera>, Ref<GlobalTransform>)>,
     vulkan_instance: Res<VulkanInstance>,
 ) {
-    println!("init camera");
     for (entity, camera, transform) in camera_query {
-        println!("checking init");
         if !camera.is_added() || !transform.is_added() {
             continue;
         }
-        println!("adding camera data");
         commands
             .entity(entity)
             .insert(VoxelCameraData::new(&camera, &transform, &vulkan_instance).unwrap());
