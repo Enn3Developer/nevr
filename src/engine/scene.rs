@@ -177,7 +177,7 @@ impl SceneManager {
             ],
         };
 
-        let voxel_world = VoxelWorld::new(vulkan_instance.clone(), voxel_library);
+        let voxel_world = VoxelWorld::new();
 
         Self {
             vulkan_instance,
@@ -214,37 +214,37 @@ impl SceneManager {
         //     }
         // }
 
-        if self.current_scene.updated_voxels() {
-            let (material_data, voxel_data) = self
-                .voxel_world
-                .update(self.current_scene.get_blocks().to_vec());
-
-            self.descriptor_set = Some(
-                DescriptorSet::new(
-                    self.vulkan_instance.descriptor_set_allocator(),
-                    ctx.pipeline_layout.set_layouts()[0].clone(),
-                    [
-                        WriteDescriptorSet::acceleration_structure(0, self.voxel_world.tlas()),
-                        WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
-                    ],
-                    [],
-                )
-                .unwrap(),
-            );
-
-            self.intersect_descriptor_set = Some(
-                DescriptorSet::new(
-                    self.vulkan_instance.descriptor_set_allocator(),
-                    ctx.pipeline_layout.set_layouts()[2].clone(),
-                    [
-                        WriteDescriptorSet::buffer(0, voxel_data.clone()),
-                        WriteDescriptorSet::buffer(1, material_data.clone()),
-                    ],
-                    [],
-                )
-                .unwrap(),
-            );
-        }
+        // if self.current_scene.updated_voxels() {
+        //     let (material_data, voxel_data) =
+        //         self.voxel_world
+        //             .update(self.current_scene.get_blocks().to_vec());
+        //
+        //     self.descriptor_set = Some(
+        //         DescriptorSet::new(
+        //             self.vulkan_instance.descriptor_set_allocator(),
+        //             ctx.pipeline_layout.set_layouts()[0].clone(),
+        //             [
+        //                 WriteDescriptorSet::acceleration_structure(0, self.voxel_world.tlas()),
+        //                 WriteDescriptorSet::buffer(1, self.camera.camera_gpu_buffer()),
+        //             ],
+        //             [],
+        //         )
+        //         .unwrap(),
+        //     );
+        //
+        //     self.intersect_descriptor_set = Some(
+        //         DescriptorSet::new(
+        //             self.vulkan_instance.descriptor_set_allocator(),
+        //             ctx.pipeline_layout.set_layouts()[2].clone(),
+        //             [
+        //                 WriteDescriptorSet::buffer(0, voxel_data.clone()),
+        //                 WriteDescriptorSet::buffer(1, material_data.clone()),
+        //             ],
+        //             [],
+        //         )
+        //         .unwrap(),
+        //     );
+        // }
 
         let sky_color_buffer = Buffer::from_data(
             self.vulkan_instance.memory_allocator(),
@@ -420,10 +420,10 @@ impl SceneManager {
                 // RunCommand::Bounces(bounces) => {
                 //     self.camera.set_bounces(bounces);
                 // }
-                RunCommand::VoxelMaterial(id, material) => {
-                    self.voxel_world.new_material(id, material)
-                }
-                RunCommand::VoxelType(id, voxel_type) => self.voxel_world.new_type(id, voxel_type),
+                // RunCommand::VoxelMaterial(id, material) => {
+                //     self.voxel_world.new_material(id, material)
+                // }
+                // RunCommand::VoxelType(id, voxel_type) => self.voxel_world.new_type(id, voxel_type),
                 _ => {}
             }
         }

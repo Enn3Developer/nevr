@@ -63,6 +63,10 @@ impl VoxelCamera {
             bounces,
         }
     }
+
+    pub fn update_aspect_ratio(&mut self, width: f32, height: f32) {
+        self.projection.aspect_ratio = width / height;
+    }
 }
 
 impl Default for VoxelCamera {
@@ -161,7 +165,9 @@ impl VoxelCameraData {
         let cmd = builder.build().unwrap();
         cmd.execute(vulkan_instance.queue())
             .unwrap()
-            .flush()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
             .unwrap();
 
         Ok(())

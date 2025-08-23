@@ -1,3 +1,4 @@
+use crate::pipeline::{VulkanDescriptorBinding, VulkanDescriptorSet, new_pipeline_layout};
 use bevy::prelude::Resource;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::{
@@ -6,6 +7,7 @@ use vulkano::command_buffer::allocator::{
 use vulkano::descriptor_set::allocator::{
     StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
 };
+use vulkano::descriptor_set::layout::DescriptorType;
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
@@ -15,6 +17,12 @@ use vulkano::memory::allocator::{
     FreeListAllocator, GenericMemoryAllocator, GenericMemoryAllocatorCreateInfo,
     StandardMemoryAllocator,
 };
+use vulkano::pipeline::ray_tracing::{
+    RayTracingPipeline, RayTracingPipelineCreateInfo, RayTracingShaderGroupCreateInfo,
+    ShaderBindingTable, ShaderBindingTableAddresses,
+};
+use vulkano::pipeline::{PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::shader::ShaderStages;
 use vulkano::{DeviceSize, Validated, Version, VulkanLibrary};
 use winit::raw_window_handle::HandleError;
 
@@ -27,6 +35,9 @@ pub struct VulkanInstance {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<GenericMemoryAllocator<FreeListAllocator>>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    pipeline_layout: Arc<PipelineLayout>,
+    pipeline: Arc<RayTracingPipeline>,
+    shader_binding_table: ShaderBindingTable,
 }
 
 impl VulkanInstance {
@@ -191,6 +202,111 @@ impl VulkanInstance {
             StandardDescriptorSetAllocatorCreateInfo::default(),
         ));
 
+        let pipeline_layout = new_pipeline_layout(
+            device.clone(),
+            &[
+                VulkanDescriptorSet {
+                    bindings: &[
+                        VulkanDescriptorBinding {
+                            stage: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
+                            descriptor_type: DescriptorType::AccelerationStructure,
+                        },
+                        VulkanDescriptorBinding {
+                            stage: ShaderStages::RAYGEN,
+                            descriptor_type: DescriptorType::UniformBuffer,
+                        },
+                    ],
+                },
+                VulkanDescriptorSet {
+                    bindings: &[VulkanDescriptorBinding {
+                        stage: ShaderStages::RAYGEN,
+                        descriptor_type: DescriptorType::StorageImage,
+                    }],
+                },
+                VulkanDescriptorSet {
+                    bindings: &[
+                        VulkanDescriptorBinding {
+                            stage: ShaderStages::INTERSECTION | ShaderStages::CLOSEST_HIT,
+                            descriptor_type: DescriptorType::StorageBuffer,
+                        },
+                        VulkanDescriptorBinding {
+                            stage: ShaderStages::CLOSEST_HIT,
+                            descriptor_type: DescriptorType::StorageBuffer,
+                        },
+                    ],
+                },
+                VulkanDescriptorSet {
+                    bindings: &[
+                        VulkanDescriptorBinding {
+                            stage: ShaderStages::MISS,
+                            descriptor_type: DescriptorType::StorageBuffer,
+                        },
+                        VulkanDescriptorBinding {
+                            stage: ShaderStages::RAYGEN | ShaderStages::CLOSEST_HIT,
+                            descriptor_type: DescriptorType::UniformBuffer,
+                        },
+                    ],
+                },
+            ],
+        );
+
+        let pipeline = {
+            let raygen = raygen::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let closest_hit = raychit::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let miss = raymiss::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let intersect = rayintersect::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+            let shadow = rayshadow::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(raygen),
+                PipelineShaderStageCreateInfo::new(closest_hit),
+                PipelineShaderStageCreateInfo::new(miss),
+                PipelineShaderStageCreateInfo::new(intersect),
+                PipelineShaderStageCreateInfo::new(shadow),
+            ];
+
+            let groups = [
+                RayTracingShaderGroupCreateInfo::General { general_shader: 0 },
+                RayTracingShaderGroupCreateInfo::General { general_shader: 2 },
+                RayTracingShaderGroupCreateInfo::General { general_shader: 4 },
+                RayTracingShaderGroupCreateInfo::ProceduralHit {
+                    closest_hit_shader: Some(1),
+                    any_hit_shader: None,
+                    intersection_shader: 3,
+                },
+            ];
+
+            RayTracingPipeline::new(
+                device.clone(),
+                None,
+                RayTracingPipelineCreateInfo {
+                    stages: stages.to_vec().into(),
+                    groups: groups.to_vec().into(),
+                    max_pipeline_ray_recursion_depth: 2,
+                    ..RayTracingPipelineCreateInfo::layout(pipeline_layout.clone())
+                },
+            )
+            .ok()?
+        };
+
+        let shader_binding_table =
+            ShaderBindingTable::new(memory_allocator.clone(), &pipeline).unwrap();
+
         Some(Self {
             instance,
             queue_family_index,
@@ -199,6 +315,9 @@ impl VulkanInstance {
             command_buffer_allocator,
             memory_allocator,
             descriptor_set_allocator,
+            pipeline_layout,
+            pipeline,
+            shader_binding_table,
         })
     }
 
@@ -228,6 +347,18 @@ impl VulkanInstance {
 
     pub fn descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
         self.descriptor_set_allocator.clone()
+    }
+
+    pub fn pipeline_layout(&self) -> Arc<PipelineLayout> {
+        self.pipeline_layout.clone()
+    }
+
+    pub fn pipeline(&self) -> Arc<RayTracingPipeline> {
+        self.pipeline.clone()
+    }
+
+    pub fn shader_binding_table_addresses(&self) -> ShaderBindingTableAddresses {
+        self.shader_binding_table.addresses().clone()
     }
 
     #[allow(unused_variables)]
@@ -267,5 +398,45 @@ impl VulkanInstance {
         {
             Ok(true)
         }
+    }
+}
+
+mod raygen {
+    vulkano_shaders::shader! {
+        ty: "raygen",
+        path: "./shaders/rgen.glsl",
+        vulkan_version: "1.3"
+    }
+}
+
+mod raychit {
+    vulkano_shaders::shader! {
+        ty: "closesthit",
+        path: "./shaders/rchit.glsl",
+        vulkan_version: "1.3"
+    }
+}
+
+mod raymiss {
+    vulkano_shaders::shader! {
+        ty: "miss",
+        path: "./shaders/rmiss.glsl",
+        vulkan_version: "1.3"
+    }
+}
+
+mod rayintersect {
+    vulkano_shaders::shader! {
+        ty: "intersection",
+        path: "./shaders/rintersect.glsl",
+        vulkan_version: "1.3"
+    }
+}
+
+mod rayshadow {
+    vulkano_shaders::shader! {
+        ty: "miss",
+        path: "./shaders/rmiss_shadow.glsl",
+        vulkan_version: "1.3"
     }
 }

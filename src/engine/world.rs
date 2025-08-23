@@ -1,6 +1,7 @@
 use crate::context::{build_acceleration_structure_voxels, build_top_level_acceleration_structure};
-use crate::voxel::{Voxel, VoxelLibrary, VoxelMaterial, VoxelType};
+use crate::voxel::{Voxel, VoxelBlock, VoxelLibrary, VoxelMaterial};
 use crate::vulkan_instance::VulkanInstance;
+use bevy::prelude::{GlobalTransform, Ref, Resource};
 use itertools::Itertools;
 use std::sync::Arc;
 use vulkano::Packed24_8;
@@ -10,35 +11,30 @@ use vulkano::acceleration_structure::{
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 
+#[derive(Resource, Default)]
 pub struct VoxelWorld {
-    vulkan_instance: Arc<VulkanInstance>,
-    voxel_library: VoxelLibrary,
     blas: Vec<Arc<AccelerationStructure>>,
     tlas: Vec<Arc<AccelerationStructure>>,
 }
 
 impl VoxelWorld {
-    pub fn new(vulkan_instance: Arc<VulkanInstance>, voxel_library: VoxelLibrary) -> Self {
+    pub fn new() -> Self {
         Self {
-            vulkan_instance,
-            voxel_library,
             blas: vec![],
             tlas: vec![],
         }
     }
 
-    pub fn update(
+    pub fn update<'a>(
         &mut self,
-        blocks: impl IntoIterator<Item = (u32, glm::Vec3)>,
+        blocks: impl IntoIterator<Item = (Ref<'a, VoxelBlock>, Ref<'a, GlobalTransform>)>,
+        voxel_library: &VoxelLibrary,
+        vulkan_instance: &VulkanInstance,
     ) -> (Subbuffer<[VoxelMaterial]>, Subbuffer<[Voxel]>) {
-        let block_chunks = blocks
-            .into_iter()
-            .filter_map(|(id, position)| self.voxel_library.create_block(id, position));
-
         // vec of voxels (Vec<Voxel>)
-        let voxel_chunks = block_chunks
+        let voxel_chunks = blocks
             .into_iter()
-            .map(|block| block.voxel_array().into_iter().collect_vec())
+            .map(|(block, transform)| block.voxel_array(&transform).into_iter().collect_vec())
             .flatten()
             .chunks(8192)
             .into_iter()
@@ -46,7 +42,7 @@ impl VoxelWorld {
             .collect_vec();
 
         let material_data = Buffer::from_iter(
-            self.vulkan_instance.memory_allocator(),
+            vulkan_instance.memory_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                 ..Default::default()
@@ -56,12 +52,12 @@ impl VoxelWorld {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            self.voxel_library.materials.clone(),
+            voxel_library.materials.clone(),
         )
         .unwrap();
 
         let voxel_data = Buffer::from_iter(
-            self.vulkan_instance.memory_allocator(),
+            vulkan_instance.memory_allocator(),
             BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                 ..Default::default()
@@ -79,7 +75,7 @@ impl VoxelWorld {
             .into_iter()
             .map(|voxels| {
                 Buffer::from_iter(
-                    self.vulkan_instance.memory_allocator(),
+                    vulkan_instance.memory_allocator(),
                     BufferCreateInfo {
                         usage: BufferUsage::STORAGE_BUFFER
                             | BufferUsage::SHADER_DEVICE_ADDRESS
@@ -102,10 +98,10 @@ impl VoxelWorld {
             .map(|voxel_buffer| unsafe {
                 build_acceleration_structure_voxels(
                     &voxel_buffer,
-                    self.vulkan_instance.memory_allocator(),
-                    self.vulkan_instance.command_buffer_allocator(),
-                    self.vulkan_instance.device(),
-                    self.vulkan_instance.queue(),
+                    vulkan_instance.memory_allocator(),
+                    vulkan_instance.command_buffer_allocator(),
+                    vulkan_instance.device(),
+                    vulkan_instance.queue(),
                 )
             })
             .collect_vec();
@@ -121,10 +117,10 @@ impl VoxelWorld {
                         ..AccelerationStructureInstance::default()
                     })
                     .collect_vec(),
-                self.vulkan_instance.memory_allocator(),
-                self.vulkan_instance.command_buffer_allocator(),
-                self.vulkan_instance.device(),
-                self.vulkan_instance.queue(),
+                vulkan_instance.memory_allocator(),
+                vulkan_instance.command_buffer_allocator(),
+                vulkan_instance.device(),
+                vulkan_instance.queue(),
             )
         }];
 
@@ -137,13 +133,5 @@ impl VoxelWorld {
 
     pub fn has_tlas(&self) -> bool {
         self.tlas.len() > 0
-    }
-
-    pub fn new_material(&mut self, id: u32, voxel_material: VoxelMaterial) {
-        self.voxel_library.new_material(id, voxel_material);
-    }
-
-    pub fn new_type(&mut self, id: u32, voxel_type: VoxelType) {
-        self.voxel_library.new_type(id, voxel_type);
     }
 }
