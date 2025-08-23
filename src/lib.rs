@@ -9,9 +9,8 @@ use crate::world::VoxelWorld;
 use ::image::{ImageBuffer, Rgba};
 use bevy::app::App;
 use bevy::prelude::{
-    Added, Changed, Commands, DetectChanges, Entity, EventReader, GlobalTransform,
-    IntoScheduleConfigs, Or, Plugin, PostUpdate, Query, Ref, Res, ResMut, Resource, Startup,
-    Update, Vec3, Vec4,
+    Changed, Commands, DetectChanges, Entity, EventReader, GlobalTransform, IntoScheduleConfigs,
+    Or, Plugin, PostUpdate, Query, Ref, Res, ResMut, Resource, Startup, Update, Vec3, Vec4,
 };
 use bevy::window::WindowResized;
 pub use egui_winit_vulkano::*;
@@ -308,7 +307,6 @@ fn update_blocks(
     }
 
     let (material_data, voxel_data) = world.update(blocks_query, &library, &vulkan_instance);
-    println!("updated world");
     descriptor_sets.intersect_descriptor_set = Some(
         DescriptorSet::new(
             vulkan_instance.descriptor_set_allocator(),

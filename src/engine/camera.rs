@@ -1,13 +1,11 @@
 use crate::vulkan_instance::VulkanInstance;
-use bevy::prelude::{Component, GlobalTransform, PerspectiveProjection};
-use bevy::render::camera::CameraProjection;
+use bevy::prelude::{Component, GlobalTransform, Mat4, PerspectiveProjection};
 use std::ops::Deref;
 use vulkano::buffer::{
     AllocateBufferError, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer,
 };
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
-    PrimaryCommandBufferAbstract,
+    AutoCommandBufferBuilder, CommandBufferUsage, PrimaryCommandBufferAbstract,
 };
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::sync::{GpuFuture, HostAccessError};
@@ -196,7 +194,12 @@ impl<C: Deref<Target = VoxelCamera>, T: Deref<Target = GlobalTransform>> From<(C
 {
     fn from(camera_and_transform: (C, T)) -> Self {
         let (camera, transform) = camera_and_transform;
-        let projection = camera.projection.get_clip_from_view();
+        let projection = Mat4::perspective_rh(
+            camera.projection.fov,
+            camera.projection.aspect_ratio,
+            camera.projection.near,
+            camera.projection.far,
+        );
         let view = transform.compute_matrix();
         RayCamera {
             view_proj: (projection * view).to_cols_array_2d(),

@@ -100,7 +100,7 @@ impl From<Voxel> for AabbPositions {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 pub struct VoxelBlock {
     voxel_type: Arc<VoxelType>,
 }
@@ -127,6 +127,7 @@ impl VoxelBlock {
     }
 }
 
+#[derive(Debug)]
 pub struct RelativeVoxel {
     voxels: Vec<(u32, Vec3)>,
 }
@@ -142,6 +143,7 @@ impl RelativeVoxel {
     }
 }
 
+#[derive(Debug)]
 pub struct VoxelType {
     size: i32,
     voxels: RelativeVoxel,
