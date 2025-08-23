@@ -19,7 +19,6 @@ layout (set = 0, binding = 1) uniform Camera {
     float focusDistance;
     uint samples;
     uint bounces;
-    uint frame;
 } camera;
 layout (set = 1, binding = 0, rgba32f) uniform image2D image;
 layout (set = 3, binding = 1) uniform Light {
@@ -28,8 +27,8 @@ layout (set = 3, binding = 1) uniform Light {
 } light;
 
 void main() {
-    Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), camera.frame * camera.samples * camera.bounces);
-    uint pixelRandomSeed = InitRandomSeed(camera.frame * camera.samples * camera.bounces, camera.frame * camera.samples);
+    Ray.RandomSeed = InitRandomSeed(InitRandomSeed(gl_LaunchIDEXT.x, gl_LaunchIDEXT.y), camera.samples * camera.bounces);
+    uint pixelRandomSeed = InitRandomSeed(camera.samples * camera.bounces, camera.samples);
 
     vec3 pixelColor = vec3(0);
 
@@ -94,11 +93,5 @@ void main() {
     pixelColor = pixelColor / camera.samples;
     // pixelColor = sqrt(pixelColor);
 
-    if (false) {
-        vec3 old_color = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
-        vec3 color = (old_color * camera.frame + pixelColor) / (camera.frame + 1);
-        imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(color, 1.0));
-    } else {
-        imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(pixelColor, 1.0));
-    }
+    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(pixelColor, 1.0));
 }

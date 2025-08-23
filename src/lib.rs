@@ -112,6 +112,9 @@ fn render(
     render_target: Res<VoxelRenderTarget>,
     mut images: ResMut<Assets<bevy::image::Image>>,
 ) {
+    const BYTES_PER_CHANNEL: DeviceSize = 4;
+    const CHANNELS: DeviceSize = 4;
+
     let image = images.get_mut(&render_target.0).unwrap();
 
     let mut builder = AutoCommandBufferBuilder::primary(
@@ -173,7 +176,7 @@ fn render(
                 | MemoryTypeFilter::HOST_RANDOM_ACCESS,
             ..Default::default()
         },
-        image.width() as DeviceSize * image.height() as DeviceSize * 4 * 4,
+        image.width() as DeviceSize * image.height() as DeviceSize * BYTES_PER_CHANNEL * CHANNELS,
     )
     .unwrap();
 
@@ -184,9 +187,7 @@ fn render(
         ))
         .unwrap();
 
-    println!("building command buffer");
     let command_buffer = builder.build().unwrap();
-    println!("executing and waiting command buffer");
     command_buffer
         .execute(vulkan_instance.queue())
         .unwrap()
@@ -399,7 +400,6 @@ fn update_descriptor_set(
     };
 
     if camera_data.is_changed() || world.is_changed() {
-        println!("updated descriptor");
         descriptor_sets.descriptor_set = Some(
             DescriptorSet::new(
                 vulkan_instance.descriptor_set_allocator(),
@@ -423,8 +423,6 @@ fn update_sky(
     if !light.is_changed() {
         return;
     }
-
-    println!("updated sky");
 
     let sky_color_buffer = Buffer::from_data(
         vulkan_instance.memory_allocator(),
