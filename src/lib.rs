@@ -1,34 +1,30 @@
+extern crate alloc;
+
 pub mod engine;
 
 use crate::engine::camera::{VoxelCamera, VoxelCameraData};
+use crate::engine::render::{MAX_FRAMES_IN_FLIGHT, VoxelRenderPlugin};
 use crate::engine::voxel::{VoxelBlock, VoxelLibrary};
 use crate::engine::vulkan_instance::VulkanInstance;
 use crate::engine::world::VoxelWorld;
-use bevy::app::{App, MainScheduleOrder};
+use bevy::app::App;
 use bevy::asset::RenderAssetUsages;
-use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::{
     AssetServer, Assets, Camera2d, Changed, Commands, DetectChanges, Entity, EventReader,
-    GlobalTransform, Handle, IntoScheduleConfigs, Or, Plugin, PostUpdate, Query, Ref, Res, ResMut,
-    Resource, Sprite, Startup, Update, Vec3, Vec4,
+    GlobalTransform, Handle, IntoScheduleConfigs, Or, Plugin, Query, Ref, Res, ResMut, Resource,
+    Sprite, Startup, Update, Vec3, Vec4,
 };
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::WindowResized;
 use itertools::Itertools;
 use std::sync::Arc;
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, CopyImageToBufferInfo,
-    PrimaryCommandBufferAbstract,
-};
+use vulkano::Version;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageCreateInfo, ImageUsage};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::pipeline::PipelineBindPoint;
-use vulkano::sync::GpuFuture;
-use vulkano::{DeviceSize, Version};
 
 #[derive(Debug, BufferContents, Copy, Clone)]
 #[repr(C)]
@@ -54,7 +50,7 @@ pub struct DescriptorSets {
     pub descriptor_set: Option<Arc<DescriptorSet>>,
     pub intersect_descriptor_set: Option<Arc<DescriptorSet>>,
     pub sky_color_descriptor_set: Option<Arc<DescriptorSet>>,
-    pub image_descriptor_sets: [Option<(Arc<ImageView>, Arc<DescriptorSet>)>; 3],
+    pub image_descriptor_sets: [Option<(Arc<ImageView>, Arc<DescriptorSet>)>; MAX_FRAMES_IN_FLIGHT],
 }
 
 #[derive(Resource)]
@@ -69,134 +65,32 @@ impl NEVRPlugin {
     }
 }
 
-#[derive(ScheduleLabel, Hash, Clone, Debug, Eq, PartialEq)]
-pub struct VoxelRender;
-
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
-        let app = app.init_schedule(VoxelRender);
-
-        app.world_mut()
-            .resource_mut::<MainScheduleOrder>()
-            .insert_before(PostUpdate, VoxelRender);
-
-        app.insert_resource(
-            VulkanInstance::new(Some(self.name.clone()), self.version.clone()).unwrap(),
-        )
-        .insert_resource(VoxelLight {
-            ambient: Vec4::new(0.03, 0.03, 0.03, 1.0),
-            direction: Vec4::NEG_Y,
-            sky_color: Vec3::new(0.5, 0.7, 1.0),
-        })
-        .init_resource::<VoxelLibrary>()
-        .init_resource::<VoxelWorld>()
-        .init_resource::<DescriptorSets>()
-        .add_systems(Startup, (init_images, setup))
-        .add_systems(
-            Update,
-            (
-                (init_camera, update_camera).chain(),
-                update_camera_view,
-                update_blocks,
-                update_descriptor_set,
-                update_sky,
-            ),
-        )
-        .add_systems(VoxelRender, render);
+        app.add_plugins(VoxelRenderPlugin)
+            .insert_resource(
+                VulkanInstance::new(Some(self.name.clone()), self.version.clone()).unwrap(),
+            )
+            .insert_resource(VoxelLight {
+                ambient: Vec4::new(0.03, 0.03, 0.03, 1.0),
+                direction: Vec4::NEG_Y,
+                sky_color: Vec3::new(0.5, 0.7, 1.0),
+            })
+            .init_resource::<VoxelLibrary>()
+            .init_resource::<VoxelWorld>()
+            .init_resource::<DescriptorSets>()
+            .add_systems(Startup, (init_images, setup))
+            .add_systems(
+                Update,
+                (
+                    (init_camera, update_camera).chain(),
+                    update_camera_view,
+                    update_blocks,
+                    update_descriptor_set,
+                    update_sky,
+                ),
+            );
     }
-}
-
-fn render(
-    vulkan_instance: Res<VulkanInstance>,
-    descriptor_sets: Res<DescriptorSets>,
-    render_target: Res<VoxelRenderTarget>,
-    mut images: ResMut<Assets<bevy::image::Image>>,
-) {
-    const BYTES_PER_CHANNEL: DeviceSize = 4;
-    const CHANNELS: DeviceSize = 4;
-
-    let image = images.get_mut(&render_target.0).unwrap();
-
-    let mut builder = AutoCommandBufferBuilder::primary(
-        vulkan_instance.command_buffer_allocator(),
-        vulkan_instance.queue_family_index(),
-        CommandBufferUsage::OneTimeSubmit,
-    )
-    .unwrap();
-
-    let descriptor_set = match descriptor_sets.descriptor_set.clone() {
-        Some(d) => d,
-        None => return,
-    };
-
-    let image_descriptor_sets = match descriptor_sets.image_descriptor_sets[0].clone() {
-        Some(d) => d,
-        None => return,
-    };
-
-    let intersect_descriptor_set = match descriptor_sets.intersect_descriptor_set.clone() {
-        Some(d) => d,
-        None => return,
-    };
-
-    let sky_color_descriptor_set = match descriptor_sets.sky_color_descriptor_set.clone() {
-        Some(d) => d,
-        None => return,
-    };
-
-    builder
-        .bind_descriptor_sets(
-            PipelineBindPoint::RayTracing,
-            vulkan_instance.pipeline_layout(),
-            0,
-            vec![
-                descriptor_set,
-                image_descriptor_sets.1.clone(),
-                intersect_descriptor_set,
-                sky_color_descriptor_set,
-            ],
-        )
-        .unwrap()
-        .bind_pipeline_ray_tracing(vulkan_instance.pipeline())
-        .unwrap();
-
-    let extent = image_descriptor_sets.0.image().extent();
-
-    unsafe { builder.trace_rays(vulkan_instance.shader_binding_table_addresses(), extent) }
-        .unwrap();
-
-    let buffer: Subbuffer<[u8]> = Buffer::new_unsized(
-        vulkan_instance.memory_allocator(),
-        BufferCreateInfo {
-            usage: BufferUsage::TRANSFER_DST,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-            ..Default::default()
-        },
-        image.width() as DeviceSize * image.height() as DeviceSize * BYTES_PER_CHANNEL * CHANNELS,
-    )
-    .unwrap();
-
-    builder
-        .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
-            image_descriptor_sets.0.image().clone(),
-            buffer.clone(),
-        ))
-        .unwrap();
-
-    let command_buffer = builder.build().unwrap();
-    command_buffer
-        .execute(vulkan_instance.queue())
-        .unwrap()
-        .then_signal_fence_and_flush()
-        .unwrap()
-        .wait(None)
-        .unwrap();
-
-    image.data = Some(buffer.read().unwrap().to_vec());
 }
 
 fn setup(mut commands: Commands, assets: Res<AssetServer>) {
@@ -221,7 +115,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 }
 
 fn init_images(vulkan_instance: Res<VulkanInstance>, mut descriptor_sets: ResMut<DescriptorSets>) {
-    descriptor_sets.image_descriptor_sets = (0..3)
+    descriptor_sets.image_descriptor_sets = (0..MAX_FRAMES_IN_FLIGHT)
         .map(|_| {
             let image = Image::new(
                 vulkan_instance.memory_allocator(),
@@ -252,7 +146,7 @@ fn init_images(vulkan_instance: Res<VulkanInstance>, mut descriptor_sets: ResMut
                 .unwrap(),
             ))
         })
-        .collect_array::<3>()
+        .collect_array::<MAX_FRAMES_IN_FLIGHT>()
         .unwrap();
 }
 
@@ -316,7 +210,7 @@ fn update_camera_view(
         depth_or_array_layers: 1,
     });
 
-    descriptor_sets.image_descriptor_sets = (0..3)
+    descriptor_sets.image_descriptor_sets = (0..MAX_FRAMES_IN_FLIGHT)
         .map(|_| {
             let image = Image::new(
                 vulkan_instance.memory_allocator(),
@@ -347,7 +241,7 @@ fn update_camera_view(
                 .unwrap(),
             ))
         })
-        .collect_array::<3>()
+        .collect_array::<MAX_FRAMES_IN_FLIGHT>()
         .unwrap();
 }
 

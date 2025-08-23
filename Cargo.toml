@@ -8,4 +8,4 @@ vulkano = "0.35.1"
 vulkano-shaders = "0.35.0"
 bytemuck = "1.23.1"
 itertools = "0.14.0"
-bevy = { version = "0.16.1", default-features = false, features = ["wayland", "x11", "bevy_core_pipeline", "bevy_image", "bevy_render", "bevy_winit", "std", "bevy_ui"] }
+bevy = { version = "0.16.1", default-features = false, features = ["wayland", "x11", "bevy_core_pipeline", "bevy_image", "bevy_render", "bevy_winit", "std"] }
