@@ -16,7 +16,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::WindowResized;
 use itertools::Itertools;
 use std::sync::Arc;
-use vulkano::Version;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyImageToBufferInfo,
@@ -29,6 +28,7 @@ use vulkano::image::{Image, ImageCreateInfo, ImageUsage};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::pipeline::PipelineBindPoint;
 use vulkano::sync::GpuFuture;
+use vulkano::{DeviceSize, Version};
 
 #[derive(Debug, BufferContents, Copy, Clone)]
 #[repr(C)]
@@ -112,7 +112,8 @@ fn render(
     render_target: Res<VoxelRenderTarget>,
     mut images: ResMut<Assets<bevy::image::Image>>,
 ) {
-    println!("rendering");
+    let image = images.get_mut(&render_target.0).unwrap();
+
     let mut builder = AutoCommandBufferBuilder::primary(
         vulkan_instance.command_buffer_allocator(),
         vulkan_instance.queue_family_index(),
@@ -172,7 +173,7 @@ fn render(
                 | MemoryTypeFilter::HOST_RANDOM_ACCESS,
             ..Default::default()
         },
-        1920 * 1080 * 4 * 4,
+        image.width() as DeviceSize * image.height() as DeviceSize * 4 * 4,
     )
     .unwrap();
 
@@ -194,7 +195,7 @@ fn render(
         .wait(None)
         .unwrap();
 
-    images.get_mut(&render_target.0).unwrap().data = Some(buffer.read().unwrap().to_vec());
+    image.data = Some(buffer.read().unwrap().to_vec());
 }
 
 fn setup(mut commands: Commands, assets: Res<AssetServer>) {
@@ -286,6 +287,10 @@ fn update_camera(
 fn update_camera_view(
     camera_query: Query<&mut VoxelCamera>,
     mut resize_reader: EventReader<WindowResized>,
+    render_target: Res<VoxelRenderTarget>,
+    vulkan_instance: Res<VulkanInstance>,
+    mut images: ResMut<Assets<bevy::image::Image>>,
+    mut descriptor_sets: ResMut<DescriptorSets>,
 ) {
     let mut width = 16.0;
     let mut height = 9.0;
@@ -304,6 +309,45 @@ fn update_camera_view(
     for mut camera in camera_query {
         camera.update_aspect_ratio(width, height);
     }
+    images.get_mut(&render_target.0).unwrap().resize(Extent3d {
+        width: width as u32,
+        height: height as u32,
+        depth_or_array_layers: 1,
+    });
+
+    descriptor_sets.image_descriptor_sets = (0..3)
+        .map(|_| {
+            let image = Image::new(
+                vulkan_instance.memory_allocator(),
+                ImageCreateInfo {
+                    usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
+                    extent: [width as u32, height as u32, 1],
+                    format: Format::R32G32B32A32_SFLOAT,
+                    view_formats: vec![Format::R32G32B32A32_SFLOAT],
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let view = ImageView::new_default(image).unwrap();
+
+            Some((
+                view.clone(),
+                DescriptorSet::new(
+                    vulkan_instance.descriptor_set_allocator(),
+                    vulkan_instance.pipeline_layout().set_layouts()[1].clone(),
+                    [WriteDescriptorSet::image_view(0, view)],
+                    [],
+                )
+                .unwrap(),
+            ))
+        })
+        .collect_array::<3>()
+        .unwrap();
 }
 
 fn update_blocks(
