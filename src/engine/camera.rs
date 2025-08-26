@@ -38,6 +38,7 @@ impl Default for VoxelCamera {
         Self::new(0.0, 3.4, 5, 3)
     }
 }
+
 #[derive(Debug, Pod, Zeroable, Copy, Clone)]
 #[repr(C)]
 pub struct RayCamera {
@@ -56,8 +57,7 @@ impl<
     P: Deref<Target = Projection>,
 > From<(C, T, P)> for RayCamera
 {
-    fn from(camera_and_transform: (C, T, P)) -> Self {
-        let (camera, transform, projection) = camera_and_transform;
+    fn from((camera, transform, projection): (C, T, P)) -> Self {
         let projection = projection.get_clip_from_view();
         let view = transform.to_matrix();
         RayCamera {

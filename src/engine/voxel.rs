@@ -1,6 +1,10 @@
-use bevy::prelude::{Component, GlobalTransform, Resource, Vec3};
+use crate::engine::color::{IntoRgba, VoxelColor};
+use bevy::prelude::Transform;
+use bevy::prelude::{Component, Resource, Vec3};
 use bytemuck::{Pod, Zeroable};
-use std::sync::Arc;
+
+pub type VoxelTypeId = u32;
+pub type VoxelMaterialId = u32;
 
 pub enum MaterialModel {
     Lambertian,
@@ -48,19 +52,25 @@ impl VoxelMaterial {
         }
     }
 
-    pub fn new_lambertian(diffuse: [f32; 4]) -> Self {
-        Self::new(diffuse, 0.0, 0.0, MaterialModel::Lambertian)
+    pub fn new_lambertian(diffuse: VoxelColor) -> Self {
+        Self::new(diffuse.into_rgba(), 0.0, 0.0, MaterialModel::Lambertian)
     }
 
-    pub fn new_metallic(diffuse: [f32; 4], fuzziness: f32) -> Self {
-        Self::new(diffuse, fuzziness, 0.0, MaterialModel::Metallic)
+    pub fn new_metallic(diffuse: VoxelColor, fuzziness: f32) -> Self {
+        Self::new(diffuse.into_rgba(), fuzziness, 0.0, MaterialModel::Metallic)
     }
 
-    pub fn new_dielectric(diffuse: [f32; 4], refraction_index: f32) -> Self {
-        Self::new(diffuse, 0.0, refraction_index, MaterialModel::Dielectric)
+    pub fn new_dielectric(diffuse: VoxelColor, refraction_index: f32) -> Self {
+        Self::new(
+            diffuse.into_rgba(),
+            0.0,
+            refraction_index,
+            MaterialModel::Dielectric,
+        )
     }
 
-    pub fn new_diffuse_light(mut diffuse: [f32; 4], brightness: f32) -> Self {
+    pub fn new_diffuse_light(diffuse: VoxelColor, brightness: f32) -> Self {
+        let mut diffuse = diffuse.into_rgba();
         diffuse[0] *= brightness;
         diffuse[1] *= brightness;
         diffuse[2] *= brightness;
@@ -91,39 +101,43 @@ impl Voxel {
 }
 
 #[derive(Component, Debug)]
+#[require(Transform)]
 pub struct VoxelBlock {
-    voxel_type: Arc<VoxelType>,
+    voxel_type_id: VoxelTypeId,
 }
 
 impl VoxelBlock {
-    pub fn new(voxel_type: Arc<VoxelType>) -> Self {
-        Self { voxel_type }
+    pub fn new(voxel_type_id: impl Into<VoxelTypeId>) -> Self {
+        Self {
+            voxel_type_id: voxel_type_id.into(),
+        }
     }
 
-    pub fn voxel_array(&self, transform: &GlobalTransform) -> impl IntoIterator<Item = Voxel> {
-        let voxel_size = 1.0 / self.voxel_type.size as f32;
-
-        self.voxel_type
-            .voxels
-            .voxels
-            .iter()
-            .map(move |(material, pos)| {
-                Voxel::new(
-                    *transform * (pos * voxel_size),
-                    *transform * ((pos + 1.0) * voxel_size),
-                    *material,
-                )
-            })
-    }
+    // TODO: move this code somewhere else
+    // pub fn voxel_array(&self, transform: &GlobalTransform) -> impl IntoIterator<Item = Voxel> {
+    //     let voxel_size = 1.0 / self.voxel_type.size as f32;
+    //
+    //     self.voxel_type
+    //         .voxels
+    //         .voxels
+    //         .iter()
+    //         .map(move |(material, pos)| {
+    //             Voxel::new(
+    //                 *transform * (pos * voxel_size),
+    //                 *transform * ((pos + 1.0) * voxel_size),
+    //                 *material,
+    //             )
+    //         })
+    // }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RelativeVoxel {
-    voxels: Vec<(u32, Vec3)>,
+    voxels: Vec<(VoxelMaterialId, Vec3)>,
 }
 
 impl RelativeVoxel {
-    pub fn new(voxels: impl IntoIterator<Item = (impl Into<u32>, Vec3)>) -> Self {
+    pub fn new(voxels: impl IntoIterator<Item = (impl Into<VoxelMaterialId>, Vec3)>) -> Self {
         Self {
             voxels: voxels
                 .into_iter()
@@ -133,7 +147,7 @@ impl RelativeVoxel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VoxelType {
     size: i32,
     voxels: RelativeVoxel,
@@ -150,8 +164,8 @@ impl VoxelType {
 
 #[derive(Resource, Default)]
 pub struct VoxelLibrary {
-    voxels: Vec<Arc<VoxelType>>,
-    pub(crate) materials: Vec<VoxelMaterial>,
+    voxels: Vec<VoxelType>,
+    materials: Vec<VoxelMaterial>,
 }
 
 impl VoxelLibrary {
@@ -162,7 +176,15 @@ impl VoxelLibrary {
         }
     }
 
-    pub fn new_material(&mut self, id: impl Into<u32>, voxel_material: VoxelMaterial) {
+    pub fn materials(&self) -> &[VoxelMaterial] {
+        &self.materials
+    }
+
+    pub fn voxel_types(&self) -> &[VoxelType] {
+        &self.voxels
+    }
+
+    pub fn new_material(&mut self, id: impl Into<VoxelMaterialId>, voxel_material: VoxelMaterial) {
         let material_id = id.into();
 
         let mut difference = material_id as isize - self.materials.len() as isize;
@@ -178,8 +200,7 @@ impl VoxelLibrary {
         }
     }
 
-    pub fn new_type(&mut self, id: impl Into<u32>, voxel_type: VoxelType) {
-        let voxel_type = Arc::new(voxel_type);
+    pub fn new_type(&mut self, id: impl Into<VoxelTypeId>, voxel_type: VoxelType) {
         let voxel_id = id.into();
 
         let mut difference = voxel_id as isize - self.voxels.len() as isize;
@@ -193,11 +214,5 @@ impl VoxelLibrary {
             self.voxels.push(voxel_type.clone());
             difference -= 1;
         }
-    }
-
-    pub fn create_block(&self, id: impl Into<u32>) -> Option<VoxelBlock> {
-        let voxel_type = self.voxels.get(id.into() as usize)?.clone();
-
-        Some(VoxelBlock::new(voxel_type))
     }
 }
