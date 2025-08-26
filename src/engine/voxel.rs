@@ -1,7 +1,6 @@
 use bevy::prelude::{Component, GlobalTransform, Resource, Vec3};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
-use vulkano::acceleration_structure::AabbPositions;
 
 pub enum MaterialModel {
     Lambertian,
@@ -87,15 +86,6 @@ impl Voxel {
             max: [max.x, max.y, max.z],
             material_id,
             _padding_1: 0,
-        }
-    }
-}
-
-impl From<Voxel> for AabbPositions {
-    fn from(voxel: Voxel) -> Self {
-        AabbPositions {
-            min: voxel.min,
-            max: voxel.max,
         }
     }
 }
