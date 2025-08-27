@@ -1,11 +1,25 @@
-use bevy::prelude::PerspectiveProjection;
-use bevy::prelude::{Component, GlobalTransform, Projection, Transform};
+use bevy::camera::CameraMainTextureUsages;
+use bevy::core_pipeline::core_3d::graph::Core3d;
+use bevy::ecs::query::QueryItem;
+use bevy::prelude::{Camera, Component, GlobalTransform, PerspectiveProjection, Projection};
+use bevy::render::camera::CameraRenderGraph;
+use bevy::render::extract_component::ExtractComponent;
+use bevy::render::render_resource::{ShaderType, TextureUsages};
+use bevy::render::view::Hdr;
 use bytemuck::{Pod, Zeroable};
 use std::ops::Deref;
 
 #[derive(Clone, Debug, Component)]
 #[require(
-    Transform,
+    Camera,
+    Hdr,
+    CameraRenderGraph::new(Core3d),
+    CameraMainTextureUsages(
+        TextureUsages::RENDER_ATTACHMENT
+        | TextureUsages::TEXTURE_BINDING
+        | TextureUsages::COPY_SRC
+        | TextureUsages::STORAGE_BINDING
+    ),
     Projection::Perspective(
         PerspectiveProjection {
             aspect_ratio: 16.0 / 9.0,
@@ -39,7 +53,21 @@ impl Default for VoxelCamera {
     }
 }
 
-#[derive(Debug, Pod, Zeroable, Copy, Clone)]
+impl ExtractComponent for VoxelCamera {
+    type QueryData = (
+        &'static VoxelCamera,
+        &'static GlobalTransform,
+        &'static Projection,
+    );
+    type QueryFilter = ();
+    type Out = RayCamera;
+
+    fn extract_component(item: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
+        Some(RayCamera::from(item))
+    }
+}
+
+#[derive(Debug, Pod, Zeroable, Copy, Clone, ShaderType, Component)]
 #[repr(C)]
 pub struct RayCamera {
     view_proj: [[f32; 4]; 4],

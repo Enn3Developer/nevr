@@ -1,10 +1,16 @@
+use crate::ToBytes;
 use crate::engine::color::{IntoRgba, VoxelColor};
-use bevy::prelude::Transform;
-use bevy::prelude::{Component, Resource, Vec3};
+use bevy::asset::AssetId;
+use bevy::ecs::query::QueryItem;
+use bevy::ecs::system::SystemParamItem;
+use bevy::ecs::system::lifetimeless::SRes;
+use bevy::prelude::{Asset, Handle, Transform, TypePath};
+use bevy::prelude::{Component, Vec3};
+use bevy::render::extract_component::ExtractComponent;
+use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
+use bevy::render::render_resource::{BufferInitDescriptor, BufferUsages};
+use bevy::render::renderer::RenderDevice;
 use bytemuck::{Pod, Zeroable};
-
-pub type VoxelTypeId = u32;
-pub type VoxelMaterialId = u32;
 
 pub enum MaterialModel {
     Lambertian,
@@ -26,7 +32,7 @@ impl From<MaterialModel> for u32 {
     }
 }
 
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Asset, TypePath, Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct VoxelMaterial {
     diffuse: [f32; 4],
@@ -103,14 +109,12 @@ impl Voxel {
 #[derive(Component, Debug)]
 #[require(Transform)]
 pub struct VoxelBlock {
-    voxel_type_id: VoxelTypeId,
+    pub voxel_type: Handle<VoxelType>,
 }
 
 impl VoxelBlock {
-    pub fn new(voxel_type_id: impl Into<VoxelTypeId>) -> Self {
-        Self {
-            voxel_type_id: voxel_type_id.into(),
-        }
+    pub fn new(voxel_type: Handle<VoxelType>) -> Self {
+        Self { voxel_type }
     }
 
     // TODO: move this code somewhere else
@@ -131,13 +135,35 @@ impl VoxelBlock {
     // }
 }
 
+#[derive(Component, Debug)]
+pub struct RenderVoxelBlock {
+    pub voxel_type: AssetId<VoxelType>,
+}
+
+impl ExtractComponent for VoxelBlock {
+    type QueryData = (&'static VoxelBlock, &'static Transform);
+    type QueryFilter = ();
+    type Out = (RenderVoxelBlock, Transform);
+
+    fn extract_component(
+        (block, transform): QueryItem<'_, '_, Self::QueryData>,
+    ) -> Option<Self::Out> {
+        Some((
+            RenderVoxelBlock {
+                voxel_type: block.voxel_type.id(),
+            },
+            *transform,
+        ))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RelativeVoxel {
-    voxels: Vec<(VoxelMaterialId, Vec3)>,
+    pub voxels: Vec<(Handle<VoxelMaterial>, Vec3)>,
 }
 
 impl RelativeVoxel {
-    pub fn new(voxels: impl IntoIterator<Item = (impl Into<VoxelMaterialId>, Vec3)>) -> Self {
+    pub fn new(voxels: impl IntoIterator<Item = (Handle<VoxelMaterial>, Vec3)>) -> Self {
         Self {
             voxels: voxels
                 .into_iter()
@@ -147,7 +173,7 @@ impl RelativeVoxel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Asset, TypePath, Debug, Clone)]
 pub struct VoxelType {
     size: i32,
     voxels: RelativeVoxel,
@@ -160,59 +186,29 @@ impl VoxelType {
             size: size as i32,
         }
     }
+
+    pub fn size(&self) -> i32 {
+        self.size
+    }
+
+    pub fn voxels(&self) -> &[(Handle<VoxelMaterial>, Vec3)] {
+        &self.voxels.voxels
+    }
 }
 
-#[derive(Resource, Default)]
-pub struct VoxelLibrary {
-    voxels: Vec<VoxelType>,
-    materials: Vec<VoxelMaterial>,
-}
+#[derive(Asset, TypePath, Debug)]
+pub struct RenderVoxelType;
 
-impl VoxelLibrary {
-    pub fn new() -> Self {
-        Self {
-            voxels: vec![],
-            materials: vec![],
-        }
-    }
+impl RenderAsset for RenderVoxelType {
+    type SourceAsset = VoxelType;
+    type Param = SRes<RenderDevice>;
 
-    pub fn materials(&self) -> &[VoxelMaterial] {
-        &self.materials
-    }
-
-    pub fn voxel_types(&self) -> &[VoxelType] {
-        &self.voxels
-    }
-
-    pub fn new_material(&mut self, id: impl Into<VoxelMaterialId>, voxel_material: VoxelMaterial) {
-        let material_id = id.into();
-
-        let mut difference = material_id as isize - self.materials.len() as isize;
-
-        if difference < 0 {
-            *self.materials.get_mut(material_id as usize).unwrap() = voxel_material;
-            return;
-        }
-
-        while difference >= 0 {
-            self.materials.push(voxel_material.clone());
-            difference -= 1;
-        }
-    }
-
-    pub fn new_type(&mut self, id: impl Into<VoxelTypeId>, voxel_type: VoxelType) {
-        let voxel_id = id.into();
-
-        let mut difference = voxel_id as isize - self.voxels.len() as isize;
-
-        if difference < 0 {
-            *self.voxels.get_mut(voxel_id as usize).unwrap() = voxel_type;
-            return;
-        }
-
-        while difference >= 0 {
-            self.voxels.push(voxel_type.clone());
-            difference -= 1;
-        }
+    fn prepare_asset(
+        _source_asset: Self::SourceAsset,
+        _asset_id: AssetId<Self::SourceAsset>,
+        _render_device: &mut SystemParamItem<Self::Param>,
+        _previous_asset: Option<&Self>,
+    ) -> Result<Self, PrepareAssetError<Self::SourceAsset>> {
+        Ok(Self)
     }
 }

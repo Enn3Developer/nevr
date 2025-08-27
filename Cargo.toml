@@ -5,4 +5,7 @@ edition = "2024"
 
 [dependencies]
 bytemuck = "1.23.2"
-bevy = { git = "https://github.com/bevyengine/bevy.git", default-features = false, features = ["wayland", "x11", "bevy_core_pipeline", "bevy_render", "bevy_winit", "std"] }
+bevy = { git = "https://github.com/bevyengine/bevy.git", default-features = false, features = [
+    "wayland", "x11", "bevy_core_pipeline", "bevy_render", "bevy_winit", "std"
+] }
+itertools = "0.14.0"
