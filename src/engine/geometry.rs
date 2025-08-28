@@ -1,32 +1,115 @@
 use crate::ToBytes;
 use crate::engine::voxel::{RenderVoxelType, VoxelType};
 use bevy::platform::collections::HashMap;
-use bevy::prelude::{AssetId, Res, ResMut, Resource, Transform, Vec3, Vec4};
+use bevy::prelude::{AssetId, Res, ResMut, Resource, Transform, Vec3};
 use bevy::render::render_asset::ExtractedAssets;
 use bevy::render::render_resource::{Buffer, BufferInitDescriptor, BufferUsages};
 use bevy::render::renderer::RenderDevice;
 use itertools::Itertools;
 
-// source for the data: https://raw.githubusercontent.com/McNopper/GLUS/master/GLUS/src/glus_shape.c
-pub const VERTICES: [f32; 96] = [
-    -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0,
-    1.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0,
-    1.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0,
-    -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0,
-    -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0,
-    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0,
+#[rustfmt::skip]
+pub const VERTICES: [f32; 72] = [
+    // LEFT
+    1.0, 1.0, 1.0,
+    1.0, 0.0, 1.0,
+    1.0, 1.0, 0.0,
+    1.0, 0.0, 0.0,
+
+    // BOTTOM
+    1.0, 0.0, 1.0,
+    0.0, 0.0, 1.0,
+    1.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+
+    // FORWARD
+    1.0, 1.0, 1.0,
+    0.0, 1.0, 1.0,
+    1.0, 0.0, 1.0,
+    0.0, 0.0, 1.0,
+
+    // RIGHT
+    0.0, 1.0, 1.0,
+    0.0, 0.0, 1.0,
+    0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0,
+
+    // TOP
+    1.0, 1.0, 1.0,
+    0.0, 1.0, 1.0,
+    1.0, 1.0, 0.0,
+    0.0, 1.0, 0.0,
+
+    // BACKWARD
+    1.0, 1.0, 0.0,
+    0.0, 1.0, 0.0,
+    1.0, 0.0, 0.0,
+    0.0, 0.0, 0.0,
 ];
 
+#[rustfmt::skip]
 pub const NORMALS: [f32; 72] = [
-    0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
-    0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, -1.0,
-    0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0,
-    -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+    // LEFT
+    1.0, 0.0, 0.0,
+    1.0, 0.0, 0.0,
+    1.0, 0.0, 0.0,
+    1.0, 0.0, 0.0,
+
+    // BOTTOM
+    0.0, -1.0, 0.0,
+    0.0, -1.0, 0.0,
+    0.0, -1.0, 0.0,
+    0.0, -1.0, 0.0,
+
+    // FORWARD
+    0.0, 0.0, 1.0,
+    0.0, 0.0, 1.0,
+    0.0, 0.0, 1.0,
+    0.0, 0.0, 1.0,
+
+    // RIGHT
+    -1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+
+    // TOP
+    0.0, 1.0, 0.0,
+    0.0, 1.0, 0.0,
+    0.0, 1.0, 0.0,
+    0.0, 1.0, 0.0,
+
+    // BACKWARD
+    0.0, 0.0, -1.0,
+    0.0, 0.0, -1.0,
+    0.0, 0.0, -1.0,
+    0.0, 0.0, -1.0,
 ];
 
+#[rustfmt::skip]
 pub const INDICES: [u32; 36] = [
-    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 15, 14, 12, 14, 13, 16, 17, 18,
-    16, 18, 19, 20, 23, 22, 20, 22, 21,
+    // LEFT
+    2, 0, 1,
+    2, 1, 3,
+
+    // BOTTOM
+    6, 4, 5,
+    6, 5, 7,
+
+    // FORWARD
+    10, 8, 9,
+    10, 9, 11,
+
+    // RIGHT
+    13, 12, 14,
+    15, 13, 14,
+
+    // TOP
+    17, 16, 18,
+    19, 17, 18,
+
+    // BACKWARD
+    21, 20, 22,
+    23, 21, 22,
 ];
 
 #[derive(Resource, Default)]
@@ -63,7 +146,7 @@ pub fn prepare_geometry(
     for (id, voxel_type) in &voxel_types.extracted {
         let size = 1.0 / voxel_type.size() as f32;
         let voxels = voxel_type.voxels();
-        let mut vertices = Vec::with_capacity(VERTICES.len() * voxels.len());
+        let mut vertices = Vec::with_capacity((VERTICES.len() + VERTICES.len() / 3) * voxels.len());
         let mut indices = Vec::with_capacity(INDICES.len() * voxels.len());
         let mut normals = Vec::with_capacity(NORMALS.len() * voxels.len());
         let mut offset = 0;
@@ -73,19 +156,19 @@ pub fn prepare_geometry(
             let transform =
                 Transform::from_scale(Vec3::new(size, size, size)).with_translation(position);
 
-            let chunks = VERTICES.iter().chunks(4);
+            let chunks = VERTICES.iter().chunks(3);
 
             for vec in chunks.into_iter() {
-                let vec: [&f32; 4] = vec.collect_array().unwrap();
-                let vertex = transform.to_matrix() * Vec4::new(*vec[0], *vec[1], *vec[2], *vec[3]);
+                let vec: [&f32; 3] = vec.collect_array().unwrap();
+                let vertex = transform * Vec3::new(*vec[0], *vec[1], *vec[2]);
                 vertices.push(vertex.x);
                 vertices.push(vertex.y);
                 vertices.push(vertex.z);
-                vertices.push(vertex.w);
+                vertices.push(1.0);
             }
 
             for index in INDICES {
-                indices.push(index + offset * INDICES.len() as u32);
+                indices.push(index + offset * (VERTICES.len() as u32 / 3));
             }
 
             for normal in NORMALS {

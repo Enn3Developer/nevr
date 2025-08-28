@@ -82,18 +82,18 @@ impl ViewNode for NEVRNode {
             return Ok(());
         };
 
-        let command_encoder = render_context.command_encoder();
+        // let command_encoder = render_context.command_encoder();
+        //
+        // let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
+        //     label: Some("voxel_raytracing"),
+        //     timestamp_writes: None,
+        // });
+        //
+        // // TODO: bind the BindGroups
+        // pass.set_pipeline(pipeline);
+        // pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
 
-        let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("voxel_raytracing"),
-            timestamp_writes: None,
-        });
-
-        // TODO: bind the BindGroups
-        pass.set_pipeline(pipeline);
-        pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
-
-        println!("test");
+        // println!("test");
         Ok(())
     }
 }

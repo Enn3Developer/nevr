@@ -129,7 +129,7 @@ fn allocate_blas(
 ) -> (Blas, BlasTriangleGeometrySizeDescriptor) {
     let blas_size = BlasTriangleGeometrySizeDescriptor {
         vertex_format: VertexFormat::Float32x3,
-        // 3 floats in a vertex, 4 bytes in a float
+        // 4 floats in a vertex, 4 bytes in a float
         vertex_count: vertices_size / 4 / 16,
         index_format: Some(IndexFormat::Uint32),
         // 4 bytes per int
