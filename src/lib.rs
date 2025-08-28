@@ -9,7 +9,7 @@ use crate::engine::voxel::{
 };
 use bevy::app::App;
 use bevy::prelude::{
-    AssetApp, FromWorld, IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut, Resource,
+    AssetApp, AssetId, FromWorld, IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut, Resource,
     Transform, Vec4, World,
 };
 use bevy::render::extract_component::ExtractComponentPlugin;
@@ -19,12 +19,13 @@ use bevy::render::render_resource::binding_types::{
     acceleration_structure, storage_buffer_read_only, texture_storage_2d, uniform_buffer,
 };
 use bevy::render::render_resource::{
-    AccelerationStructureFlags, AccelerationStructureUpdateMode, BindGroup, BindGroupLayout,
-    BindGroupLayoutEntries, CommandEncoderDescriptor, CreateTlasDescriptor, ShaderStages,
-    StorageTextureAccess, TextureFormat, TlasInstance,
+    AccelerationStructureFlags, AccelerationStructureUpdateMode, BindGroup, BindGroupEntries,
+    BindGroupLayout, BindGroupLayoutEntries, CommandEncoderDescriptor, CreateTlasDescriptor,
+    ShaderStages, StorageBuffer, StorageTextureAccess, TextureFormat, TlasInstance,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::settings::WgpuFeatures;
+use bevy::render::view::ViewUniform;
 use bevy::render::{Render, RenderApp, RenderSystems};
 
 #[derive(Resource, ExtractResource, Clone)]
@@ -62,8 +63,8 @@ impl Plugin for NEVRPlugin {
         app.add_plugins(NEVRNodeRender)
             .add_plugins(ExtractResourcePlugin::<VoxelLight>::default())
             .add_plugins(RenderAssetPlugin::<RenderVoxelType>::default())
-            .add_plugins(ExtractComponentPlugin::<VoxelBlock>::extract_visible())
-            .add_plugins(ExtractComponentPlugin::<VoxelCamera>::extract_visible())
+            .add_plugins(ExtractComponentPlugin::<VoxelBlock>::default())
+            .add_plugins(ExtractComponentPlugin::<VoxelCamera>::default())
             .init_asset::<VoxelMaterial>()
             .init_asset::<VoxelType>()
             .init_resource::<VoxelLight>();
@@ -173,6 +174,7 @@ impl FromWorld for VoxelBindings {
                                 TextureFormat::Rgba16Float,
                                 StorageTextureAccess::WriteOnly,
                             ),
+                            uniform_buffer::<ViewUniform>(true),
                         ),
                     ),
                 ),
@@ -192,6 +194,7 @@ pub fn prepare_bindings(
     voxel_bindings.bind_group = None;
 
     if blocks_query.is_empty() {
+        eprintln!("no blocks");
         return;
     }
 
@@ -203,9 +206,13 @@ pub fn prepare_bindings(
             update_mode: AccelerationStructureUpdateMode::Build,
             max_instances: blocks_query.iter().len() as u32,
         });
+    let mut transforms = StorageBuffer::<Vec<Mat4>>::default();
+    let mut objects = StorageBuffer::<Vec<u32>>::default();
+    let mut voxel_type: AssetId<VoxelType> = AssetId::invalid();
 
     let mut instance_id = 0;
     for (block, transform) in blocks_query {
+        voxel_type = block.voxel_type.clone();
         let Some(blas) = blas_manager.get(&block.voxel_type) else {
             continue;
         };
@@ -228,14 +235,42 @@ pub fn prepare_bindings(
             instance_id as u32,
             0xFF,
         ));
+        transforms.get_mut().push(transform);
+        objects.get_mut().push(instance_id as u32);
 
         instance_id += 1;
     }
+
+    transforms.write_buffer(&render_device, &render_queue);
+    objects.write_buffer(&render_device, &render_queue);
+    let Some(vertices) = geometry_manager.get_vertices(&voxel_type) else {
+        eprintln!("no vertices");
+        return;
+    };
+    let Some(normals) = geometry_manager.get_normals(&voxel_type) else {
+        eprintln!("no normals");
+        return;
+    };
+    let Some(indices) = geometry_manager.get_indices(&voxel_type) else {
+        eprintln!("no indices");
+        return;
+    };
 
     let mut command_encoder =
         render_device.create_command_encoder(&CommandEncoderDescriptor::default());
     command_encoder.build_acceleration_structures([], [&tlas]);
     render_queue.submit([command_encoder.finish()]);
+    voxel_bindings.bind_group = Some(render_device.create_bind_group(
+        "voxel_bindings",
+        &voxel_bindings.bind_group_layouts[0],
+        &BindGroupEntries::sequential((
+            tlas.as_binding(),
+            objects.binding().unwrap(),
+            indices.as_entire_binding(),
+            vertices.as_entire_binding(),
+            normals.as_entire_binding(),
+        )),
+    ));
 }
 
 fn tlas_transform(transform: &Mat4) -> [f32; 12] {

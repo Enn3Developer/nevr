@@ -1,9 +1,16 @@
+use crate::ToBytes;
 use bevy::camera::CameraMainTextureUsages;
 use bevy::core_pipeline::core_3d::graph::Core3d;
 use bevy::ecs::query::QueryItem;
-use bevy::prelude::{Camera, Component, GlobalTransform, PerspectiveProjection, Projection};
+use bevy::prelude::{
+    Camera, Camera2d, Component, GlobalTransform, Msaa, PerspectiveProjection, Projection,
+};
 use bevy::render::camera::CameraRenderGraph;
 use bevy::render::extract_component::ExtractComponent;
+use bevy::render::render_resource::encase::internal::{
+    AlignmentValue, BufferMut, SizeValue, Writer,
+};
+use bevy::render::render_resource::encase::private::{Metadata, WriteInto};
 use bevy::render::render_resource::{ShaderType, TextureUsages};
 use bevy::render::view::Hdr;
 use bytemuck::{Pod, Zeroable};
@@ -12,7 +19,9 @@ use std::ops::Deref;
 #[derive(Clone, Debug, Component)]
 #[require(
     Camera,
+    Camera2d::default(),
     Hdr,
+    Msaa::Off,
     CameraRenderGraph::new(Core3d),
     CameraMainTextureUsages(
         TextureUsages::RENDER_ATTACHMENT
@@ -67,12 +76,12 @@ impl ExtractComponent for VoxelCamera {
     }
 }
 
-#[derive(Debug, Pod, Zeroable, Copy, Clone, ShaderType, Component)]
+#[derive(Debug, Pod, Zeroable, Copy, Clone, Component, Default)]
 #[repr(C)]
 pub struct RayCamera {
-    view_proj: [[f32; 4]; 4],
-    view_inverse: [[f32; 4]; 4],
-    proj_inverse: [[f32; 4]; 4],
+    view_proj: [f32; 16],
+    view_inverse: [f32; 16],
+    proj_inverse: [f32; 16],
     aperture: f32,
     focus_distance: f32,
     samples: u32,
@@ -89,13 +98,39 @@ impl<
         let projection = projection.get_clip_from_view();
         let view = transform.to_matrix();
         RayCamera {
-            view_proj: (projection * view).to_cols_array_2d(),
-            view_inverse: view.inverse().to_cols_array_2d(),
-            proj_inverse: projection.inverse().to_cols_array_2d(),
+            view_proj: (projection * view).to_cols_array(),
+            view_inverse: view.inverse().to_cols_array(),
+            proj_inverse: projection.inverse().to_cols_array(),
             aperture: camera.aperture,
             focus_distance: camera.focus_distance,
             samples: camera.samples,
             bounces: camera.bounces,
         }
+    }
+}
+
+impl ShaderType for RayCamera {
+    type ExtraMetadata = ();
+    const METADATA: Metadata<Self::ExtraMetadata> = Metadata {
+        alignment: AlignmentValue::new(16),
+        has_uniform_min_alignment: false,
+        min_size: SizeValue::new(320),
+        is_pod: false,
+        extra: (),
+    };
+}
+
+impl WriteInto for RayCamera {
+    fn write_into<B>(&self, writer: &mut Writer<B>)
+    where
+        B: BufferMut,
+    {
+        writer.write_slice(self.view_proj.to_bytes());
+        writer.write_slice(self.view_inverse.to_bytes());
+        writer.write_slice(self.proj_inverse.to_bytes());
+        writer.write(&self.aperture.to_le_bytes());
+        writer.write(&self.focus_distance.to_le_bytes());
+        writer.write(&self.samples.to_le_bytes());
+        writer.write(&self.bounces.to_le_bytes());
     }
 }

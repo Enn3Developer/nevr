@@ -1,4 +1,5 @@
 use crate::VoxelBindings;
+use crate::engine::camera::RayCamera;
 use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
@@ -10,10 +11,11 @@ use bevy::render::render_graph::{
     NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
 };
 use bevy::render::render_resource::{
-    CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, PipelineCache,
+    BindGroupEntries, CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor,
+    DynamicUniformBuffer, PipelineCache, UniformBuffer,
 };
-use bevy::render::renderer::RenderContext;
-use bevy::render::view::ViewTarget;
+use bevy::render::renderer::{RenderContext, RenderQueue};
+use bevy::render::view::{ViewTarget, ViewUniformOffset, ViewUniforms};
 
 pub struct NEVRNodeRender;
 
@@ -29,7 +31,7 @@ impl Plugin for NEVRNodeRender {
             .add_render_graph_node::<ViewNodeRunner<NEVRNode>>(Core3d, NEVRNodeLabel)
             .add_render_graph_edges(
                 Core3d,
-                (Node3d::EndPrepasses, NEVRNodeLabel, Node3d::EndMainPass),
+                (Node3d::EndPrepasses, NEVRNodeLabel, Node3d::StartMainPass),
             );
     }
 }
@@ -59,17 +61,28 @@ impl FromWorld for NEVRNode {
 
 impl ViewNode for NEVRNode {
     // TODO: find a way to extract RayCamera together with ViewTarget
-    type ViewQuery = (&'static ViewTarget, &'static ExtractedCamera);
+    type ViewQuery = (
+        &'static ViewTarget,
+        &'static ExtractedCamera,
+        &'static RayCamera,
+        &'static ViewUniformOffset,
+    );
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (view_target, extracted_camera): QueryItem<'w, '_, Self::ViewQuery>,
+        (view_target, extracted_camera, camera, view_uniform_offset): QueryItem<
+            'w,
+            '_,
+            Self::ViewQuery,
+        >,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
         let voxel_bindings = world.resource::<VoxelBindings>();
+        let render_queue = world.resource::<RenderQueue>();
+        let view_uniforms = world.resource::<ViewUniforms>();
 
         let Some(pipeline) = pipeline_cache.get_compute_pipeline(self.pipeline) else {
             eprintln!(
@@ -79,21 +92,46 @@ impl ViewNode for NEVRNode {
             return Ok(());
         };
         let Some(viewport) = &extracted_camera.physical_viewport_size else {
+            eprintln!("no viewport size");
+            return Ok(());
+        };
+        let Some(bind_group) = &voxel_bindings.bind_group else {
+            eprintln!("no bind group");
+            return Ok(());
+        };
+        let Some(view_uniforms) = view_uniforms.uniforms.binding() else {
+            eprintln!("no view uniforms");
             return Ok(());
         };
 
-        // let command_encoder = render_context.command_encoder();
-        //
-        // let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
-        //     label: Some("voxel_raytracing"),
-        //     timestamp_writes: None,
-        // });
-        //
-        // // TODO: bind the BindGroups
-        // pass.set_pipeline(pipeline);
-        // pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
+        let mut camera_uniform = DynamicUniformBuffer::default();
+        camera_uniform.push(camera);
+        camera_uniform.write_buffer(render_context.render_device(), render_queue);
 
-        // println!("test");
+        let camera_bind_group = render_context.render_device().create_bind_group(
+            "voxel_bindings_camera",
+            &voxel_bindings.bind_group_layouts[1],
+            &BindGroupEntries::sequential((
+                camera_uniform.binding().unwrap(),
+                view_target.get_unsampled_color_attachment().view,
+                view_uniforms,
+            )),
+        );
+
+        let command_encoder = render_context.command_encoder();
+
+        let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("voxel_raytracing"),
+            timestamp_writes: None,
+        });
+
+        // TODO: bind the BindGroups
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(1, &camera_bind_group, &[view_uniform_offset.offset]);
+        pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
+
+        println!("test");
         Ok(())
     }
 }

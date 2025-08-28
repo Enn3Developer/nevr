@@ -151,8 +151,8 @@ pub fn prepare_geometry(
         let mut normals = Vec::with_capacity(NORMALS.len() * voxels.len());
         let mut offset = 0;
 
-        for (_material, position) in voxels {
-            let position = position * size;
+        for voxel in voxels {
+            let position = voxel.position * size;
             let transform =
                 Transform::from_scale(Vec3::new(size, size, size)).with_translation(position);
 

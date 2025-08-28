@@ -1,14 +1,11 @@
-use crate::ToBytes;
 use crate::engine::color::{IntoRgba, VoxelColor};
 use bevy::asset::AssetId;
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::system::SystemParamItem;
 use bevy::ecs::system::lifetimeless::SRes;
-use bevy::prelude::{Asset, Handle, Transform, TypePath};
-use bevy::prelude::{Component, Vec3};
+use bevy::prelude::{Asset, Component, Handle, Transform, TypePath, Vec3, Visibility};
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
-use bevy::render::render_resource::{BufferInitDescriptor, BufferUsages};
 use bevy::render::renderer::RenderDevice;
 use bytemuck::{Pod, Zeroable};
 
@@ -107,7 +104,7 @@ impl Voxel {
 }
 
 #[derive(Component, Debug)]
-#[require(Transform)]
+#[require(Transform, Visibility::Inherited)]
 pub struct VoxelBlock {
     pub voxel_type: Handle<VoxelType>,
 }
@@ -159,28 +156,24 @@ impl ExtractComponent for VoxelBlock {
 
 #[derive(Debug, Clone)]
 pub struct RelativeVoxel {
-    pub voxels: Vec<(Handle<VoxelMaterial>, Vec3)>,
+    pub material: Handle<VoxelMaterial>,
+    pub position: Vec3,
 }
 
 impl RelativeVoxel {
-    pub fn new(voxels: impl IntoIterator<Item = (Handle<VoxelMaterial>, Vec3)>) -> Self {
-        Self {
-            voxels: voxels
-                .into_iter()
-                .map(|(id, pos)| (id.into(), pos))
-                .collect(),
-        }
+    pub fn new(material: Handle<VoxelMaterial>, position: Vec3) -> Self {
+        Self { material, position }
     }
 }
 
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct VoxelType {
     size: i32,
-    voxels: RelativeVoxel,
+    voxels: Vec<RelativeVoxel>,
 }
 
 impl VoxelType {
-    pub fn new(size: u32, voxels: RelativeVoxel) -> Self {
+    pub fn new(size: u32, voxels: Vec<RelativeVoxel>) -> Self {
         Self {
             voxels,
             size: size as i32,
@@ -191,8 +184,8 @@ impl VoxelType {
         self.size
     }
 
-    pub fn voxels(&self) -> &[(Handle<VoxelMaterial>, Vec3)] {
-        &self.voxels.voxels
+    pub fn voxels(&self) -> &[RelativeVoxel] {
+        &self.voxels
     }
 }
 
