@@ -13,6 +13,10 @@ use bevy::render::render_resource::{
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use std::collections::VecDeque;
 
+// Code based on bevy_solari's blas management
+
+const MAX_COMPACTION_VERTICES_PER_FRAME: u32 = 400_000;
+
 #[derive(Resource, Default)]
 pub struct BlasManager {
     blas: HashMap<AssetId<VoxelType>, Blas>,
@@ -87,7 +91,36 @@ pub fn prepare_blas(
     render_queue.submit([command_encoder.finish()]);
 }
 
-// TODO: compact blases
+pub fn compact_blas(mut blas_manager: ResMut<BlasManager>, render_queue: Res<RenderQueue>) {
+    let queue_size = blas_manager.compaction_queue.len();
+    let mut blocks_processed = 0;
+    let mut vertices_processed = 0;
+
+    while !blas_manager.compaction_queue.is_empty()
+        && vertices_processed < MAX_COMPACTION_VERTICES_PER_FRAME
+        && blocks_processed < queue_size
+    {
+        blocks_processed += 1;
+        let (id, count, processing) = blas_manager.compaction_queue.pop_front().unwrap();
+
+        let Some(blas) = blas_manager.get(&id) else {
+            continue;
+        };
+
+        if !processing {
+            blas.prepare_compaction_async(|_| {});
+        }
+
+        if blas.ready_for_compaction() {
+            let compacted_blas = render_queue.compact_blas(blas);
+            blas_manager.blas.insert(id, compacted_blas);
+            vertices_processed += count;
+            continue;
+        }
+
+        blas_manager.compaction_queue.push_back((id, count, true));
+    }
+}
 
 fn allocate_blas(
     vertices_size: u32,
