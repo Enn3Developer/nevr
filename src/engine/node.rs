@@ -2,6 +2,7 @@
 
 use crate::VoxelBindings;
 use crate::engine::camera::RayCamera;
+use crate::engine::light::RenderVoxelLight;
 use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
@@ -14,7 +15,7 @@ use bevy::render::render_graph::{
 };
 use bevy::render::render_resource::{
     BindGroupEntries, CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor,
-    DynamicUniformBuffer, PipelineCache, UniformBuffer,
+    DynamicUniformBuffer, PipelineCache,
 };
 use bevy::render::renderer::{RenderContext, RenderQueue};
 use bevy::render::view::{ViewTarget, ViewUniformOffset, ViewUniforms};
@@ -85,6 +86,7 @@ impl ViewNode for NEVRNode {
         let voxel_bindings = world.resource::<VoxelBindings>();
         let render_queue = world.resource::<RenderQueue>();
         let view_uniforms = world.resource::<ViewUniforms>();
+        let voxel_light = world.resource::<RenderVoxelLight>();
 
         let Some(pipeline) = pipeline_cache.get_compute_pipeline(self.pipeline) else {
             eprintln!(
@@ -109,6 +111,9 @@ impl ViewNode for NEVRNode {
         let mut camera_uniform = DynamicUniformBuffer::default();
         camera_uniform.push(camera);
         camera_uniform.write_buffer(render_context.render_device(), render_queue);
+        let mut light_uniform = DynamicUniformBuffer::default();
+        light_uniform.push(voxel_light);
+        light_uniform.write_buffer(render_context.render_device(), render_queue);
 
         let camera_bind_group = render_context.render_device().create_bind_group(
             "voxel_bindings_camera",
@@ -116,6 +121,7 @@ impl ViewNode for NEVRNode {
             &BindGroupEntries::sequential((
                 camera_uniform.binding().unwrap(),
                 view_target.get_unsampled_color_attachment().view,
+                light_uniform.binding().unwrap(),
                 view_uniforms,
             )),
         );

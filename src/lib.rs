@@ -39,6 +39,7 @@ pub mod engine;
 use crate::engine::blas::{BlasManager, compact_blas, prepare_blas};
 use crate::engine::camera::{RayCamera, VoxelCamera};
 use crate::engine::geometry::{GeometryManager, prepare_geometry};
+use crate::engine::light::{RenderVoxelLight, VoxelLight};
 use crate::engine::node::NEVRNodeRender;
 use crate::engine::voxel::{
     RenderVoxelBlock, RenderVoxelType, VoxelBlock, VoxelMaterial, VoxelType,
@@ -63,29 +64,6 @@ use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::settings::WgpuFeatures;
 use bevy::render::view::ViewUniform;
 use bevy::render::{Render, RenderApp, RenderSystems};
-
-/// Used for ambient light, directional light and the sky color.
-///
-/// Check the fields for more information.
-#[derive(Resource, ExtractResource, Clone)]
-pub struct VoxelLight {
-    /// Ambient light, i.e. the minimum light in the scene. Defaults to 0.03
-    pub ambient: Vec4,
-    /// The direction for directional light. Defaults to NEG_Y, i.e. from top to bottom as the Sun in the middle of the day.
-    pub direction: Vec4,
-    /// The color of the sky, it's used in reflections, global illuminations, etc...
-    pub sky_color: Vec4,
-}
-
-impl Default for VoxelLight {
-    fn default() -> Self {
-        Self {
-            ambient: Vec4::new(0.03, 0.03, 0.03, 1.0),
-            direction: Vec4::NEG_Y,
-            sky_color: Vec4::new(0.5, 0.7, 1.0, 1.0),
-        }
-    }
-}
 
 /// Default plugin for NEVR.
 ///
@@ -114,7 +92,7 @@ impl NEVRPlugin {
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(NEVRNodeRender)
-            .add_plugins(ExtractResourcePlugin::<VoxelLight>::default())
+            .add_plugins(ExtractResourcePlugin::<RenderVoxelLight>::default())
             .add_plugins(RenderAssetPlugin::<RenderVoxelType>::default())
             .add_plugins(ExtractComponentPlugin::<VoxelBlock>::default())
             .add_plugins(ExtractComponentPlugin::<VoxelCamera>::default())
@@ -230,6 +208,9 @@ impl FromWorld for VoxelBindings {
                                 TextureFormat::Rgba16Float,
                                 StorageTextureAccess::WriteOnly,
                             ),
+                            // Light and other sky parameters
+                            uniform_buffer::<RenderVoxelLight>(false),
+                            // View
                             uniform_buffer::<ViewUniform>(true),
                         ),
                     ),

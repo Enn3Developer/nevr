@@ -10,6 +10,12 @@ struct Camera {
     bounces: u32,
 }
 
+struct Light {
+    ambient: vec4<f32>,
+    direction: vec4<f32>,
+    sky_color: vec4<f32>,
+}
+
 const RAY_T_MIN = 0.01f;
 const RAY_T_MAX = 100000.0f;
 
@@ -23,7 +29,8 @@ const RAY_NO_CULL = 0xFFu;
 
 @group(1) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(1) var view_output: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(2) var<uniform> view: View;
+@group(1) @binding(2) var<uniform> light: Light;
+@group(1) @binding(3) var<uniform> view: View;
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -36,7 +43,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var pixel_seed = init_random_seed(camera.samples * camera.bounces, camera.samples);
 
     for (var i = u32(0); i < camera.samples; i++) {
-        var ray_color = vec3(1.0);
+        var ray_color = light.sky_color.rgb;
         var jitter = vec2(0.5);
         if (i > 0) {
             jitter = vec2(random_float(&pixel_seed), random_float(&pixel_seed));
