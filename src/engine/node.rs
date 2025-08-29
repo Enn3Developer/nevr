@@ -1,3 +1,5 @@
+//! This module contains the renderer code.
+
 use crate::VoxelBindings;
 use crate::engine::camera::RayCamera;
 use bevy::app::App;

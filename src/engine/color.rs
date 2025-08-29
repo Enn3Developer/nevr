@@ -1,11 +1,15 @@
+//! This module contains structs and traits used by [crate::engine::voxel::VoxelMaterial] for the colors.
+
 use bevy::prelude::{IVec3, Vec3, Vec4};
 
+/// Traits to convert data to a f32 array with length 4 used to represent an RGBA color.
 pub trait IntoRgba {
     fn into_rgba(self) -> [f32; 4];
 }
 
+/// Color spaces supported by NEVR.
 pub enum VoxelColor {
-    /// \[0, 1]
+    /// Range: \[0, 1].
     RGBA(f32, f32, f32, f32),
 }
 

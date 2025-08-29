@@ -1,3 +1,5 @@
+//! This module contains the necessary resources and systems to manage BLASes (used to accelerate ray intersections).
+
 use crate::engine::geometry::GeometryManager;
 use crate::engine::voxel::{RenderVoxelType, VoxelType};
 use bevy::mesh::VertexFormat;

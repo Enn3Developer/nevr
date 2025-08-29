@@ -1,3 +1,5 @@
+//! This module contains the camera needed to render voxels for NEVR.
+
 use crate::ToBytes;
 use bevy::camera::CameraMainTextureUsages;
 use bevy::core_pipeline::core_3d::graph::Core3d;
@@ -17,6 +19,8 @@ use bytemuck::{Pod, Zeroable};
 use std::ops::Deref;
 
 /// A camera to use for rendering.
+///
+/// This camera enables HDR automatically (check Bevy's documentation for more information about HDR).
 ///
 /// Check the fields for more information.
 #[derive(Clone, Debug, Component)]

@@ -1,3 +1,5 @@
+//! This module contains resources and systems used in the rendering phase.
+
 use crate::ToBytes;
 use crate::engine::voxel::{RenderVoxelType, VoxelType};
 use bevy::platform::collections::HashMap;
@@ -112,6 +114,7 @@ pub const INDICES: [u32; 36] = [
     23, 21, 22,
 ];
 
+/// Manages the buffers for all voxels in the scene.
 #[derive(Resource, Default)]
 pub struct GeometryManager {
     geometries_vertices: HashMap<AssetId<VoxelType>, Buffer>,
@@ -133,6 +136,7 @@ impl GeometryManager {
     }
 }
 
+/// Extracts all necessary data to copy in buffers.
 pub fn prepare_geometry(
     mut geometry_manager: ResMut<GeometryManager>,
     voxel_types: Res<ExtractedAssets<RenderVoxelType>>,

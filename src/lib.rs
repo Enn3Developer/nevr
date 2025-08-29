@@ -1,3 +1,39 @@
+//! NEVR is a voxel raytracing renderer.
+//!
+//! Example usage of NEVR (spawns a block composed of only one white voxel and spawns a camera to render it):
+//! ```
+//! use bevy::DefaultPlugins;
+//! use bevy::prelude::{App, Startup, Commands, Res, AssetServer, Vec3};
+//! use nevr::NEVRPlugin;
+//! use nevr::engine::color::VoxelColor;
+//! use nevr::engine::camera::VoxelCamera;
+//! use nevr::engine::voxel::{VoxelMaterial, RelativeVoxel, VoxelType, VoxelBlock};
+//!
+//! fn main() {
+//!     App::new()
+//!         .add_plugins((DefaultPlugins, NEVRPlugin))
+//!         .add_systems(Startup, setup)
+//!         .run();
+//! }
+//!
+//! fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+//!     // create a new lambertian material with the color WHITE
+//!     let material = asset_server.add(VoxelMaterial::new_lambertian(VoxelColor::RGBA(1.0, 1.0, 1.0, 1.0)));
+//!     // create a list of voxels that composes a block
+//!     let voxels = vec![RelativeVoxel::new(material, Vec3::ZERO)];
+//!     // create a type of block which is composed of 1x1x1 voxels
+//!     let voxel_type = asset_server.add(VoxelType::new(1, voxels));
+//!     // spawn a new block, by default it spawns it a (0, 0, 0) with no rotation and at scale = 1
+//!     // to control its position, rotation and scale use a Transform, check the VoxelBlock documentation for more information
+//!     commands.spawn(VoxelBlock::new(voxel_type));
+//!
+//!     // spawn a new camera with default parameters
+//!     // use Transform to control the position and rotation and Projection to control the projection (perspective vs orthogonal, aspect ratio, etc...)
+//!     // VoxelCamera has additional parameters that you can check in the documentation
+//!     commands.spawn(VoxelCamera::default());
+//! }
+//! ```
+
 pub mod engine;
 
 use crate::engine::blas::{BlasManager, compact_blas, prepare_blas};
@@ -130,7 +166,9 @@ impl Plugin for NEVRPlugin {
     }
 }
 
+/// Trait to convert data to byte slices.
 pub trait ToBytes {
+    /// Convert the data representation to a byte slice.
     fn to_bytes(&self) -> &[u8];
 }
 
@@ -148,6 +186,7 @@ impl ToBytes for [u32] {
     }
 }
 
+/// Bindings used by [engine::node::NEVRNode] for rendering purposes.
 #[derive(Resource)]
 pub struct VoxelBindings {
     pub bind_group: Option<BindGroup>,
@@ -200,6 +239,7 @@ impl FromWorld for VoxelBindings {
     }
 }
 
+/// Prepare bindings for rendering.
 pub fn prepare_bindings(
     mut voxel_bindings: ResMut<VoxelBindings>,
     render_device: Res<RenderDevice>,

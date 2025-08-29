@@ -1,3 +1,8 @@
+//! The main module of the engine.
+//!
+//! Check out [voxel] and [camera] to start understanding how to use the engine.
+//! You only need these two modules and [color] to start using NEVR.
+
 pub mod blas;
 pub mod camera;
 pub mod color;

@@ -1,3 +1,5 @@
+//! This module contains all the necessary structs to create blocks.
+
 use crate::engine::color::{IntoRgba, VoxelColor};
 use bevy::asset::AssetId;
 use bevy::ecs::query::QueryItem;
@@ -10,7 +12,7 @@ use bevy::render::renderer::RenderDevice;
 use bytemuck::{Pod, Zeroable};
 
 /// Describes the model to use for a material, used in [VoxelMaterial].
-pub enum MaterialModel {
+pub enum VoxelMaterialModel {
     /// A pure color material, can also be called "diffuse"; in raster this is similar to an albedo.
     Lambertian,
     /// A reflective material with a configurable fuzziness value.
@@ -30,14 +32,14 @@ pub enum MaterialModel {
     DiffuseLight,
 }
 
-impl From<MaterialModel> for u32 {
-    fn from(value: MaterialModel) -> Self {
+impl From<VoxelMaterialModel> for u32 {
+    fn from(value: VoxelMaterialModel) -> Self {
         match value {
-            MaterialModel::Lambertian => 0,
-            MaterialModel::Metallic => 1,
-            MaterialModel::Dielectric => 2,
-            MaterialModel::Isotropic => 3,
-            MaterialModel::DiffuseLight => 4,
+            VoxelMaterialModel::Lambertian => 0,
+            VoxelMaterialModel::Metallic => 1,
+            VoxelMaterialModel::Dielectric => 2,
+            VoxelMaterialModel::Isotropic => 3,
+            VoxelMaterialModel::DiffuseLight => 4,
         }
     }
 }
@@ -63,7 +65,7 @@ impl VoxelMaterial {
         diffuse: [f32; 4],
         fuzziness: f32,
         refraction_index: f32,
-        material_model: MaterialModel,
+        material_model: VoxelMaterialModel,
     ) -> Self {
         Self {
             diffuse,
@@ -76,33 +78,43 @@ impl VoxelMaterial {
 
     /// Creates a new lambertian material.
     ///
-    /// Check [MaterialModel::Lambertian] for more information.
+    /// Check [VoxelMaterialModel::Lambertian] for more information.
     pub fn new_lambertian(diffuse: VoxelColor) -> Self {
-        Self::new(diffuse.into_rgba(), 0.0, 0.0, MaterialModel::Lambertian)
+        Self::new(
+            diffuse.into_rgba(),
+            0.0,
+            0.0,
+            VoxelMaterialModel::Lambertian,
+        )
     }
 
     /// Creates a new metallic material.
     ///
-    /// Check [MaterialModel::Metallic] for more information.
+    /// Check [VoxelMaterialModel::Metallic] for more information.
     pub fn new_metallic(diffuse: VoxelColor, fuzziness: f32) -> Self {
-        Self::new(diffuse.into_rgba(), fuzziness, 0.0, MaterialModel::Metallic)
+        Self::new(
+            diffuse.into_rgba(),
+            fuzziness,
+            0.0,
+            VoxelMaterialModel::Metallic,
+        )
     }
 
     /// Creates a new dielectric material.
     ///
-    /// Check [MaterialModel::Dielectric] for more information.
+    /// Check [VoxelMaterialModel::Dielectric] for more information.
     pub fn new_dielectric(diffuse: VoxelColor, refraction_index: f32) -> Self {
         Self::new(
             diffuse.into_rgba(),
             0.0,
             refraction_index,
-            MaterialModel::Dielectric,
+            VoxelMaterialModel::Dielectric,
         )
     }
 
     /// Creates a new emissive material.
     ///
-    /// Check [MaterialModel::DiffuseLight] for more information.
+    /// Check [VoxelMaterialModel::DiffuseLight] for more information.
     pub fn new_diffuse_light(diffuse: VoxelColor, brightness: f32) -> Self {
         let mut diffuse = diffuse.into_rgba();
         diffuse[0] *= brightness;
@@ -110,33 +122,41 @@ impl VoxelMaterial {
         diffuse[2] *= brightness;
         diffuse[3] *= brightness;
 
-        Self::new(diffuse, 0.0, 0.0, MaterialModel::DiffuseLight)
+        Self::new(diffuse, 0.0, 0.0, VoxelMaterialModel::DiffuseLight)
     }
 }
 
-#[derive(Clone, Copy, Zeroable, Pod)]
-#[repr(C)]
-pub struct Voxel {
-    min: [f32; 3],
-    _padding_1: u32,
-    max: [f32; 3],
-    material_id: u32,
-}
-
-impl Voxel {
-    pub fn new(min: Vec3, max: Vec3, material_id: u32) -> Self {
-        Self {
-            min: [min.x, min.y, min.z],
-            max: [max.x, max.y, max.z],
-            material_id,
-            _padding_1: 0,
-        }
-    }
-}
+// TODO: reimplement the voxel struct as a component to spawn singular voxels (useful for particles)
+// #[derive(Clone, Copy, Zeroable, Pod)]
+// #[repr(C)]
+// pub struct Voxel {
+//     min: [f32; 3],
+//     _padding_1: u32,
+//     max: [f32; 3],
+//     material_id: u32,
+// }
+//
+// impl Voxel {
+//     pub fn new(min: Vec3, max: Vec3, material_id: u32) -> Self {
+//         Self {
+//             min: [min.x, min.y, min.z],
+//             max: [max.x, max.y, max.z],
+//             material_id,
+//             _padding_1: 0,
+//         }
+//     }
+// }
 
 /// A component that describes a block in the world.
 ///
-/// Use [Transform] to control the size, the rotation and the position of the block in the world.
+/// Check [VoxelType] for more information.
+///
+/// Use [Transform] to control the size, the rotation and the position of the block in the world:
+/// ```rs
+/// // Transform at position x = 1, y = 2, z = 3 with a scale of 2 (i.e. it is two times bigger in all axis)
+/// let transform = Transform::from_xyz(1.0, 2.0, 3.0).with_scale(Vec3::new(2.0, 2.0, 2.0));
+/// commands.spawn((VoxelBlock::new(handle_voxel_type), transform));
+/// ```
 ///
 /// **Note:** if you rotate the block, the bounding volume in the BLAS (used to accelerate ray intersections) is still
 /// axis-aligned (i.e. it doesn't rotate) so if you have multiple rotated blocks one next to each other
@@ -152,25 +172,9 @@ impl VoxelBlock {
     pub fn new(voxel_type: Handle<VoxelType>) -> Self {
         Self { voxel_type }
     }
-
-    // TODO: move this code somewhere else
-    // pub fn voxel_array(&self, transform: &GlobalTransform) -> impl IntoIterator<Item = Voxel> {
-    //     let voxel_size = 1.0 / self.voxel_type.size as f32;
-    //
-    //     self.voxel_type
-    //         .voxels
-    //         .voxels
-    //         .iter()
-    //         .map(move |(material, pos)| {
-    //             Voxel::new(
-    //                 *transform * (pos * voxel_size),
-    //                 *transform * ((pos + 1.0) * voxel_size),
-    //                 *material,
-    //             )
-    //         })
-    // }
 }
 
+/// Used in the rendering phase to extract all needed [VoxelBlock]s.
 #[derive(Component, Debug)]
 pub struct RenderVoxelBlock {
     pub voxel_type: AssetId<VoxelType>,
@@ -195,11 +199,11 @@ impl ExtractComponent for VoxelBlock {
 
 /// A relative voxel in the type of the block.
 ///
-/// You can think of this as a Voxel in the block with the position relative to the block, for example
+/// You can think of this as a voxel in the block with the position relative to the block's position, for example
 /// a position of (0.0, 1.0, 0.0) describes a voxel that is at x = 0, y = 1, z = 0 **inside** the block.
 /// Check [VoxelType] for more information.
 ///
-/// Every voxel has its own material, check [VoxelMaterial] and [MaterialModel] for more information.
+/// Every voxel has its own material, check [VoxelMaterial] and [VoxelMaterialModel] for more information.
 #[derive(Debug, Clone)]
 pub struct RelativeVoxel {
     pub material: Handle<VoxelMaterial>,
@@ -226,6 +230,7 @@ impl RelativeVoxel {
 ///
 /// In the example above, the size is `1` because the largest dimension (either the x-axis, y-axis or z-axis)
 /// is large 1 unit, the position of the `RelativeVoxel` is (0.0, 0.0, 0.0) because it is at that coordinates **inside** the block.
+/// This means that the `RelativeVoxel` is as large as the block and its position is the same as the block.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct VoxelType {
     size: i32,
@@ -249,6 +254,7 @@ impl VoxelType {
     }
 }
 
+/// Used in the rendering phase to extracts all needed [VoxelType]s.
 #[derive(Asset, TypePath, Debug)]
 pub struct RenderVoxelType;
 
