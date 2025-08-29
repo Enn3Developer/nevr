@@ -28,10 +28,16 @@ use bevy::render::settings::WgpuFeatures;
 use bevy::render::view::ViewUniform;
 use bevy::render::{Render, RenderApp, RenderSystems};
 
+/// Used for ambient light, directional light and the sky color.
+///
+/// Check the fields for more information.
 #[derive(Resource, ExtractResource, Clone)]
 pub struct VoxelLight {
+    /// Ambient light, i.e. the minimum light in the scene. Defaults to 0.03
     pub ambient: Vec4,
+    /// The direction for directional light. Defaults to NEG_Y, i.e. from top to bottom as the Sun in the middle of the day.
     pub direction: Vec4,
+    /// The color of the sky, it's used in reflections, global illuminations, etc...
     pub sky_color: Vec4,
 }
 
@@ -45,14 +51,25 @@ impl Default for VoxelLight {
     }
 }
 
+/// Default plugin for NEVR.
+///
+/// Add it to your app to use NEVR:
+/// ```rs
+/// App::new().add_plugins((DefaultPlugins, NEVRPlugin)).run();
+/// ```
+///
+/// Note: Bevy default plugins are necessary for NEVR.
 pub struct NEVRPlugin;
 
 impl NEVRPlugin {
+    /// Required device features to support hardware raytracing
     pub fn required_hw_features() -> WgpuFeatures {
         WgpuFeatures::EXPERIMENTAL_RAY_TRACING_ACCELERATION_STRUCTURE
             | WgpuFeatures::EXPERIMENTAL_RAY_QUERY
     }
 
+    /// Required device features to support software raytracing (does not require hardware support
+    /// so it can be used on older GPUs)
     pub fn required_sw_features() -> WgpuFeatures {
         todo!("Missing software raytracing")
     }

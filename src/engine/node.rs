@@ -125,13 +125,11 @@ impl ViewNode for NEVRNode {
             timestamp_writes: None,
         });
 
-        // TODO: bind the BindGroups
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.set_bind_group(1, &camera_bind_group, &[view_uniform_offset.offset]);
         pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
 
-        println!("test");
         Ok(())
     }
 }

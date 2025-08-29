@@ -16,6 +16,9 @@ use bevy::render::view::Hdr;
 use bytemuck::{Pod, Zeroable};
 use std::ops::Deref;
 
+/// A camera to use for rendering.
+///
+/// Check the fields for more information.
 #[derive(Clone, Debug, Component)]
 #[require(
     Camera,
@@ -39,9 +42,13 @@ use std::ops::Deref;
     ),
 )]
 pub struct VoxelCamera {
+    /// Aperture of the camera.
     pub aperture: f32,
+    /// The focus distance of the camera.
     pub focus_distance: f32,
+    /// How many rays to shoot per pixel (samples per pixel).
     pub samples: u32,
+    /// The maximum number of bounces per ray (used only when hitting something).
     pub bounces: u32,
 }
 
@@ -53,6 +60,26 @@ impl VoxelCamera {
             samples,
             bounces,
         }
+    }
+
+    pub fn with_aperture(mut self, aperture: f32) -> Self {
+        self.aperture = aperture;
+        self
+    }
+
+    pub fn with_focus_distance(mut self, focus_distance: f32) -> Self {
+        self.focus_distance = focus_distance;
+        self
+    }
+
+    pub fn with_samples(mut self, samples: u32) -> Self {
+        self.samples = samples;
+        self
+    }
+
+    pub fn with_bounces(mut self, bounces: u32) -> Self {
+        self.bounces = bounces;
+        self
     }
 }
 

@@ -9,11 +9,24 @@ use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
 use bevy::render::renderer::RenderDevice;
 use bytemuck::{Pod, Zeroable};
 
+/// Describes the model to use for a material, used in [VoxelMaterial].
 pub enum MaterialModel {
+    /// A pure color material, can also be called "diffuse"; in raster this is similar to an albedo.
     Lambertian,
+    /// A reflective material with a configurable fuzziness value.
+    /// The higher the fuzziness the less precise the reflection is.
     Metallic,
+    /// A water/glass-like material, it both reflects and refracts the light.
+    /// Water has a refraction index of about 1.33, whilst glass has about 1.5.
     Dielectric,
+    /// NOT USED YET
     Isotropic,
+    /// An emissive material, could be used for torches, lamps, etc...
+    ///
+    /// The brightness can be thought as a multiplier of the color, for example if the color is pure white
+    /// and the brightness is 10, then the diffuse value would be RGBA(10.0, 10.0, 10.0, 10.0).
+    /// A convenient method is provided through [VoxelMaterial::new_diffuse_light] for which you provide a base
+    /// color and the brightness separately.
     DiffuseLight,
 }
 
@@ -29,6 +42,12 @@ impl From<MaterialModel> for u32 {
     }
 }
 
+/// Describes a material a voxel has.
+///
+/// To use this, add it to through the [bevy::prelude::AssetServer]:
+/// ```rs
+/// let handle = asset_server.add(VoxelMaterial::new_lambertian(VoxelColor::RGBA(1.0, 1.0, 1.0, 1.0)));
+/// ```
 #[derive(Asset, TypePath, Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct VoxelMaterial {
@@ -55,14 +74,23 @@ impl VoxelMaterial {
         }
     }
 
+    /// Creates a new lambertian material.
+    ///
+    /// Check [MaterialModel::Lambertian] for more information.
     pub fn new_lambertian(diffuse: VoxelColor) -> Self {
         Self::new(diffuse.into_rgba(), 0.0, 0.0, MaterialModel::Lambertian)
     }
 
+    /// Creates a new metallic material.
+    ///
+    /// Check [MaterialModel::Metallic] for more information.
     pub fn new_metallic(diffuse: VoxelColor, fuzziness: f32) -> Self {
         Self::new(diffuse.into_rgba(), fuzziness, 0.0, MaterialModel::Metallic)
     }
 
+    /// Creates a new dielectric material.
+    ///
+    /// Check [MaterialModel::Dielectric] for more information.
     pub fn new_dielectric(diffuse: VoxelColor, refraction_index: f32) -> Self {
         Self::new(
             diffuse.into_rgba(),
@@ -72,6 +100,9 @@ impl VoxelMaterial {
         )
     }
 
+    /// Creates a new emissive material.
+    ///
+    /// Check [MaterialModel::DiffuseLight] for more information.
     pub fn new_diffuse_light(diffuse: VoxelColor, brightness: f32) -> Self {
         let mut diffuse = diffuse.into_rgba();
         diffuse[0] *= brightness;
@@ -103,9 +134,11 @@ impl Voxel {
     }
 }
 
+/// A component that describes a block in the world.
 #[derive(Component, Debug)]
 #[require(Transform, Visibility::Inherited)]
 pub struct VoxelBlock {
+    /// The type of the block.
     pub voxel_type: Handle<VoxelType>,
 }
 
@@ -154,6 +187,13 @@ impl ExtractComponent for VoxelBlock {
     }
 }
 
+/// A relative voxel in the type of the block.
+///
+/// You can think of this as a Voxel in the block with the position relative to the block, for example
+/// a position of (0.0, 1.0, 0.0) describes a voxel that is at x = 0, y = 1, z = 0 **inside** the block.
+/// Check [VoxelType] for more information.
+///
+/// Every voxel has its own material, check [VoxelMaterial] and [MaterialModel] for more information.
 #[derive(Debug, Clone)]
 pub struct RelativeVoxel {
     pub material: Handle<VoxelMaterial>,
@@ -166,6 +206,20 @@ impl RelativeVoxel {
     }
 }
 
+/// Describes a type of block.
+///
+/// A VoxelType has a size as in how much large is the largest dimension of the block (x-axis, y-axis or z-axis).
+/// It has a list of voxels that are relative to the position of the block, check [RelativeVoxel] for more information about it.
+/// All the voxels inside this type will be scaled to the scale of a block, which by default is large 1x1x1 (as in basic units, you can think in meters if it's easier for you).
+///
+/// Add this asset to [bevy::prelude::AssetServer]:
+/// ```rs
+/// let voxels = vec![RelativeVoxel::new(material, Vec3::ZERO)];
+/// let voxel_type = asset_server.add(VoxelType::new(1, voxels));
+/// ```
+///
+/// In the example above, the size is `1` because the largest dimension (either the x-axis, y-axis or z-axis)
+/// is large 1 unit, the position of the `RelativeVoxel` is (0.0, 0.0, 0.0) because it is at that coordinates **inside** the block.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct VoxelType {
     size: i32,
