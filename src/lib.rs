@@ -58,7 +58,7 @@ impl Default for VoxelLight {
 /// App::new().add_plugins((DefaultPlugins, NEVRPlugin)).run();
 /// ```
 ///
-/// Note: Bevy default plugins are necessary for NEVR.
+/// **Note:** Bevy default plugins are necessary for NEVR.
 pub struct NEVRPlugin;
 
 impl NEVRPlugin {

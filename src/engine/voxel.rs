@@ -138,7 +138,7 @@ impl Voxel {
 ///
 /// Use [Transform] to control the size, the rotation and the position of the block in the world.
 ///
-/// Note: if you rotate the block, the bounding volume in the BLAS (used to accelerate ray intersections) is still
+/// **Note:** if you rotate the block, the bounding volume in the BLAS (used to accelerate ray intersections) is still
 /// axis-aligned (i.e. it doesn't rotate) so if you have multiple rotated blocks one next to each other
 /// you may suffer degraded performance.
 #[derive(Component, Debug)]
