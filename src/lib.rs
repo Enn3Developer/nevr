@@ -46,11 +46,11 @@ use crate::engine::voxel::{
 };
 use bevy::app::App;
 use bevy::prelude::{
-    AssetApp, AssetId, FromWorld, IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut, Resource,
-    Transform, Vec4, World,
+    AssetApp, AssetId, FromWorld, GlobalTransform, IntoScheduleConfigs, Mat4, Plugin, Query, Res,
+    ResMut, Resource, Vec4, World,
 };
 use bevy::render::extract_component::ExtractComponentPlugin;
-use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
+use bevy::render::extract_resource::ExtractResourcePlugin;
 use bevy::render::render_asset::{RenderAssetPlugin, prepare_assets};
 use bevy::render::render_resource::binding_types::{
     acceleration_structure, storage_buffer_read_only, texture_storage_2d, uniform_buffer,
@@ -227,7 +227,7 @@ pub fn prepare_bindings(
     render_queue: Res<RenderQueue>,
     blas_manager: Res<BlasManager>,
     geometry_manager: Res<GeometryManager>,
-    blocks_query: Query<(&RenderVoxelBlock, &Transform)>,
+    blocks_query: Query<(&RenderVoxelBlock, &GlobalTransform)>,
 ) {
     voxel_bindings.bind_group = None;
 
