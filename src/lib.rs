@@ -46,8 +46,8 @@ use crate::engine::voxel::{
 };
 use bevy::app::App;
 use bevy::prelude::{
-    AssetApp, AssetId, FromWorld, GlobalTransform, IntoScheduleConfigs, Mat4, Plugin, Query, Res,
-    ResMut, Resource, Vec4, World,
+    AssetApp, FromWorld, GlobalTransform, IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut,
+    Resource, UVec4, Vec4, World,
 };
 use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::extract_resource::ExtractResourcePlugin;
@@ -188,7 +188,7 @@ impl FromWorld for VoxelBindings {
                             // Objects
                             storage_buffer_read_only::<u32>(false),
                             // Indices
-                            storage_buffer_read_only::<u32>(false),
+                            storage_buffer_read_only::<UVec4>(false),
                             // Vertices
                             storage_buffer_read_only::<Vec4>(false),
                             // Normals
@@ -244,52 +244,45 @@ pub fn prepare_bindings(
             update_mode: AccelerationStructureUpdateMode::Build,
             max_instances: blocks_query.iter().len() as u32,
         });
-    let mut transforms = StorageBuffer::<Vec<Mat4>>::default();
     let mut objects = StorageBuffer::<Vec<u32>>::default();
-    let mut voxel_type: AssetId<VoxelType> = AssetId::invalid();
 
     let mut instance_id = 0;
     for (block, transform) in blocks_query {
-        voxel_type = block.voxel_type.clone();
+        let voxel_type = block.voxel_type.clone();
         let Some(blas) = blas_manager.get(&block.voxel_type) else {
             continue;
         };
-        // TODO: write these data to a buffer (use the VoxelType and access it through the id)
-        // TODO: access to the data and convert to world position using another buffer for the transform
-        let Some(vertices) = geometry_manager.get_vertices(&block.voxel_type) else {
-            continue;
+
+        let Some(id) = geometry_manager.get_object_id(&voxel_type) else {
+            return;
         };
-        let Some(normals) = geometry_manager.get_normals(&block.voxel_type) else {
-            continue;
-        };
-        let Some(indices) = geometry_manager.get_indices(&block.voxel_type) else {
-            continue;
+
+        let Some(index_id) = geometry_manager.get_index(id) else {
+            return;
         };
 
         let transform = transform.to_matrix();
         *tlas.get_mut_single(instance_id).unwrap() = Some(TlasInstance::new(
             blas,
             tlas_transform(&transform),
-            instance_id as u32,
+            id,
             0xFF,
         ));
-        transforms.get_mut().push(transform);
-        objects.get_mut().push(instance_id as u32);
+        objects.get_mut().push(index_id);
 
         instance_id += 1;
     }
 
-    transforms.write_buffer(&render_device, &render_queue);
     objects.write_buffer(&render_device, &render_queue);
-    let Some(vertices) = geometry_manager.get_vertices(&voxel_type) else {
+    let Some(vertices) = geometry_manager.vertices().buffer() else {
         eprintln!("no vertices");
         return;
     };
-    let Some(normals) = geometry_manager.get_normals(&voxel_type) else {
+    let Some(normals) = geometry_manager.normals().buffer() else {
         eprintln!("no normals");
         return;
     };
-    let Some(indices) = geometry_manager.get_indices(&voxel_type) else {
+    let Some(indices) = geometry_manager.indices().buffer() else {
         eprintln!("no indices");
         return;
     };

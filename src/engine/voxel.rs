@@ -5,7 +5,9 @@ use bevy::asset::AssetId;
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::system::SystemParamItem;
 use bevy::ecs::system::lifetimeless::SRes;
-use bevy::prelude::{Asset, Component, Handle, Transform, TypePath, Vec3, Visibility};
+use bevy::prelude::{
+    Asset, Component, GlobalTransform, Handle, Transform, TypePath, Vec3, Visibility,
+};
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
 use bevy::render::renderer::RenderDevice;
@@ -181,9 +183,9 @@ pub struct RenderVoxelBlock {
 }
 
 impl ExtractComponent for VoxelBlock {
-    type QueryData = (&'static VoxelBlock, &'static Transform);
+    type QueryData = (&'static VoxelBlock, &'static GlobalTransform);
     type QueryFilter = ();
-    type Out = (RenderVoxelBlock, Transform);
+    type Out = (RenderVoxelBlock, GlobalTransform);
 
     fn extract_component(
         (block, transform): QueryItem<'_, '_, Self::QueryData>,

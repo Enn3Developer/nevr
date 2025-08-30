@@ -22,10 +22,10 @@ const RAY_T_MAX = 100000.0f;
 const RAY_NO_CULL = 0xFFu;
 
 @group(0) @binding(0) var tlas: acceleration_structure;
-@group(0) @binding(1) var<storage> objects: array<u32>;
-@group(0) @binding(2) var<storage> indices: array<u32>;
-@group(0) @binding(3) var<storage> vertices: array<vec4<f32>>;
-@group(0) @binding(4) var<storage> normals: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> objects: array<u32>;
+@group(0) @binding(2) var<storage, read> indices: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> vertices: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> normals: array<vec4<f32>>;
 
 @group(1) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(1) var view_output: texture_storage_2d<rgba16float, write>;
@@ -57,9 +57,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let camera_target = camera.proj_inverse * vec4(d.x, d.y, 1.0, 1.0);
         let direction = camera.view_inverse * vec4(normalize(camera_target.xyz * camera.focus_distance - vec3(offset, 0.0)), 0.0);
 
-        let hit = trace_ray(origin.xyz, direction.xyz, 0.001, 10000.0, RAY_FLAG_NONE);
+        let hit = trace_ray(origin.xyz, direction.xyz, 0.001, 10000.0, RAY_FLAG_CULL_NO_OPAQUE | RAY_FLAG_SKIP_AABBS);
         if hit.kind != RAY_QUERY_INTERSECTION_NONE {
-            ray_color = vec3(0.0);
+            let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
+
+            let object = objects[hit.instance_custom_data];
+            let index = indices[object + hit.primitive_index];
+            let n0 = normals[index.x].xyz;
+            let n1 = normals[index.y].xyz;
+            let n2 = normals[index.z].xyz;
+
+            let normal = n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z;
+            let world_normal = normalize((hit.world_to_object * vec4(normal, 1.0)).xyz);
+
+            ray_color = abs(n1);
         }
 
         pixel_color += ray_color;

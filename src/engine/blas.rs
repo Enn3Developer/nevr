@@ -50,8 +50,8 @@ pub fn prepare_blas(
         .extracted
         .iter()
         .map(|(id, _voxel_type)| {
-            let vertices = geometry_manager.get_vertices(id).unwrap();
-            let indices = geometry_manager.get_indices(id).unwrap();
+            let vertices = geometry_manager.get_geometry_vertices(id).unwrap();
+            let indices = geometry_manager.get_geometry_indices(id).unwrap();
 
             let (blas, blas_size) = allocate_blas(
                 vertices.size() as u32,
@@ -73,7 +73,7 @@ pub fn prepare_blas(
                 size: blas_size,
                 vertex_buffer: vertices,
                 first_vertex: 0,
-                vertex_stride: 16,
+                vertex_stride: 12,
                 index_buffer: Some(indices),
                 first_index: Some(0),
                 transform_buffer: None,
@@ -131,8 +131,8 @@ fn allocate_blas(
 ) -> (Blas, BlasTriangleGeometrySizeDescriptor) {
     let blas_size = BlasTriangleGeometrySizeDescriptor {
         vertex_format: VertexFormat::Float32x3,
-        // 4 floats in a vertex, 4 bytes in a float
-        vertex_count: vertices_size / 4 / 16,
+        // 3 floats in a vertex, 4 bytes in a float
+        vertex_count: vertices_size / 3 / 16,
         index_format: Some(IndexFormat::Uint32),
         // 4 bytes per int
         index_count: Some(indices_size / 4),
