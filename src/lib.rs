@@ -38,7 +38,7 @@ pub mod engine;
 
 use crate::engine::blas::{BlasManager, compact_blas, prepare_blas};
 use crate::engine::camera::{RayCamera, VoxelCamera};
-use crate::engine::geometry::{GeometryManager, prepare_geometry};
+use crate::engine::geometry::{GeometryManager, RenderObject, prepare_geometry, prepare_materials};
 use crate::engine::light::{RenderVoxelLight, VoxelLight};
 use crate::engine::node::NEVRNodeRender;
 use crate::engine::voxel::{
@@ -89,10 +89,12 @@ impl NEVRPlugin {
     }
 }
 
+// TODO: add better checking in the code to avoid bevy/wgpu panics to better inform users of errors in their code
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(NEVRNodeRender)
             .add_plugins(ExtractResourcePlugin::<RenderVoxelLight>::default())
+            .add_plugins(RenderAssetPlugin::<VoxelMaterial>::default())
             .add_plugins(RenderAssetPlugin::<RenderVoxelType>::default())
             .add_plugins(ExtractComponentPlugin::<VoxelBlock>::default())
             .add_plugins(ExtractComponentPlugin::<VoxelCamera>::default())
@@ -123,7 +125,15 @@ impl Plugin for NEVRPlugin {
             .init_resource::<VoxelBindings>()
             .add_systems(
                 Render,
-                prepare_geometry.in_set(RenderSystems::PrepareAssets),
+                (
+                    prepare_materials
+                        .in_set(RenderSystems::PrepareAssets)
+                        .before(prepare_assets::<VoxelMaterial>),
+                    prepare_geometry
+                        .in_set(RenderSystems::PrepareAssets)
+                        .before(prepare_assets::<RenderVoxelType>),
+                )
+                    .chain(),
             )
             .add_systems(
                 Render,
@@ -186,13 +196,17 @@ impl FromWorld for VoxelBindings {
                             // TLAS
                             acceleration_structure(),
                             // Objects
-                            storage_buffer_read_only::<u32>(false),
+                            storage_buffer_read_only::<RenderObject>(false),
                             // Indices
                             storage_buffer_read_only::<UVec4>(false),
                             // Vertices
                             storage_buffer_read_only::<Vec4>(false),
                             // Normals
                             storage_buffer_read_only::<Vec4>(false),
+                            // Materials
+                            storage_buffer_read_only::<VoxelMaterial>(false),
+                            // Material Map
+                            storage_buffer_read_only::<u32>(false),
                         ),
                     ),
                 ),
@@ -244,7 +258,7 @@ pub fn prepare_bindings(
             update_mode: AccelerationStructureUpdateMode::Build,
             max_instances: blocks_query.iter().len() as u32,
         });
-    let mut objects = StorageBuffer::<Vec<u32>>::default();
+    let mut objects = StorageBuffer::<Vec<RenderObject>>::default();
 
     let mut instance_id = 0;
     for (block, transform) in blocks_query {
@@ -260,15 +274,21 @@ pub fn prepare_bindings(
         let Some(index_id) = geometry_manager.get_index(id) else {
             return;
         };
+        let Some(material_id) = geometry_manager.get_index_material(id) else {
+            return;
+        };
 
         let transform = transform.to_matrix();
         *tlas.get_mut_single(instance_id).unwrap() = Some(TlasInstance::new(
             blas,
             tlas_transform(&transform),
-            id,
+            instance_id as u32,
             0xFF,
         ));
-        objects.get_mut().push(index_id);
+        objects.get_mut().push(RenderObject {
+            index: index_id,
+            material_id,
+        });
 
         instance_id += 1;
     }
@@ -286,6 +306,14 @@ pub fn prepare_bindings(
         eprintln!("no indices");
         return;
     };
+    let Some(materials) = geometry_manager.materials().buffer() else {
+        eprintln!("no materials");
+        return;
+    };
+    let Some(material_map) = geometry_manager.material_map().buffer() else {
+        eprintln!("no material map");
+        return;
+    };
 
     let mut command_encoder =
         render_device.create_command_encoder(&CommandEncoderDescriptor::default());
@@ -300,6 +328,8 @@ pub fn prepare_bindings(
             indices.as_entire_binding(),
             vertices.as_entire_binding(),
             normals.as_entire_binding(),
+            materials.as_entire_binding(),
+            material_map.as_entire_binding(),
         )),
     ));
 }

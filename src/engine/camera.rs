@@ -126,7 +126,8 @@ impl<
 > From<(C, T, P)> for RayCamera
 {
     fn from((camera, transform, projection): (C, T, P)) -> Self {
-        let projection = projection.get_clip_from_view();
+        let mut projection = projection.get_clip_from_view();
+        projection.y_axis.y *= -1.0;
         let view = transform.to_matrix();
         RayCamera {
             view_proj: (projection * view).to_cols_array(),

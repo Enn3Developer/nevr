@@ -1,5 +1,6 @@
 //! This module contains all the necessary structs to create blocks.
 
+use crate::ToBytes;
 use crate::engine::color::{IntoRgba, VoxelColor};
 use bevy::asset::AssetId;
 use bevy::ecs::query::QueryItem;
@@ -10,6 +11,11 @@ use bevy::prelude::{
 };
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
+use bevy::render::render_resource::ShaderType;
+use bevy::render::render_resource::encase::internal::{
+    AlignmentValue, BufferMut, WriteInto, Writer,
+};
+use bevy::render::render_resource::encase::private::{Metadata, SizeValue};
 use bevy::render::renderer::RenderDevice;
 use bytemuck::{Pod, Zeroable};
 
@@ -125,6 +131,44 @@ impl VoxelMaterial {
         diffuse[3] *= brightness;
 
         Self::new(diffuse, 0.0, 0.0, VoxelMaterialModel::DiffuseLight)
+    }
+}
+
+impl RenderAsset for VoxelMaterial {
+    type SourceAsset = Self;
+    type Param = SRes<RenderDevice>;
+
+    fn prepare_asset(
+        source_asset: Self::SourceAsset,
+        _asset_id: AssetId<Self::SourceAsset>,
+        _param: &mut SystemParamItem<Self::Param>,
+        _previous_asset: Option<&Self>,
+    ) -> Result<Self, PrepareAssetError<Self::SourceAsset>> {
+        Ok(source_asset)
+    }
+}
+
+impl ShaderType for VoxelMaterial {
+    type ExtraMetadata = ();
+    const METADATA: Metadata<Self::ExtraMetadata> = Metadata {
+        alignment: AlignmentValue::new(16),
+        has_uniform_min_alignment: false,
+        min_size: SizeValue::new(32),
+        is_pod: false,
+        extra: (),
+    };
+}
+
+impl WriteInto for VoxelMaterial {
+    fn write_into<B>(&self, writer: &mut Writer<B>)
+    where
+        B: BufferMut,
+    {
+        writer.write_slice(self.diffuse.to_bytes());
+        writer.write_slice(&self._diffuse_texture_id.to_le_bytes());
+        writer.write_slice(&self.fuzziness.to_le_bytes());
+        writer.write_slice(&self.refraction_index.to_le_bytes());
+        writer.write_slice(&self.material_model.to_le_bytes());
     }
 }
 

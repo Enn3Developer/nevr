@@ -7,7 +7,7 @@ use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::ecs::query::QueryItem;
-use bevy::prelude::{FromWorld, Plugin, World};
+use bevy::prelude::{AssetServer, FromWorld, Plugin, World};
 use bevy::render::RenderApp;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::render_graph::{
@@ -34,7 +34,7 @@ impl Plugin for NEVRNodeRender {
             .add_render_graph_node::<ViewNodeRunner<NEVRNode>>(Core3d, NEVRNodeLabel)
             .add_render_graph_edges(
                 Core3d,
-                (Node3d::EndPrepasses, NEVRNodeLabel, Node3d::StartMainPass),
+                (Node3d::StartMainPass, NEVRNodeLabel, Node3d::MainOpaquePass),
             );
     }
 }
@@ -50,11 +50,12 @@ impl FromWorld for NEVRNode {
     fn from_world(world: &mut World) -> Self {
         let pipeline_cache = world.resource::<PipelineCache>();
         let voxel_bindings = world.resource::<VoxelBindings>();
+        let asset_server = world.resource::<AssetServer>();
 
         let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("voxel_raytracing_pipeline".into()),
             layout: voxel_bindings.bind_group_layouts.to_vec(),
-            shader: load_embedded_asset!(world, "shaders/raytracing.wgsl"),
+            shader: asset_server.load("embedded://nevr/engine/shaders/raytracing.wgsl"),
             ..Default::default()
         });
 
@@ -63,7 +64,6 @@ impl FromWorld for NEVRNode {
 }
 
 impl ViewNode for NEVRNode {
-    // TODO: find a way to extract RayCamera together with ViewTarget
     type ViewQuery = (
         &'static ViewTarget,
         &'static ExtractedCamera,

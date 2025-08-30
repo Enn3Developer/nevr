@@ -16,16 +16,37 @@ struct Light {
     sky_color: vec4<f32>,
 }
 
+struct Object {
+    index: u32,
+    material_id: u32,
+}
+
+const MATERIAL_MODEL_LAMBERTIAN: u32 = 0;
+const MATERIAL_MODEL_METALLIC: u32 = 1;
+const MATERIAL_MODEL_DIELECTRIC: u32 = 2;
+const _UNUSED_MATERIAL_MODEL_ISOTROPIC: u32 = 3;
+const MATERIAL_MODEL_DIFFUSE_LIGHT: u32 = 4;
+
+struct Material {
+    diffuse: vec4<f32>,
+    _unused_texture: i32,
+    fuzziness: f32,
+    refraction_index: f32,
+    material_model: u32,
+}
+
 const RAY_T_MIN = 0.01f;
 const RAY_T_MAX = 100000.0f;
 
 const RAY_NO_CULL = 0xFFu;
 
 @group(0) @binding(0) var tlas: acceleration_structure;
-@group(0) @binding(1) var<storage, read> objects: array<u32>;
+@group(0) @binding(1) var<storage, read> objects: array<Object>;
 @group(0) @binding(2) var<storage, read> indices: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> vertices: array<vec4<f32>>;
 @group(0) @binding(4) var<storage, read> normals: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> materials: array<Material>;
+@group(0) @binding(6) var<storage, read> material_map: array<u32>;
 
 @group(1) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(1) var view_output: texture_storage_2d<rgba16float, write>;
@@ -39,11 +60,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     var pixel_color = vec3(0.0);
-    var seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces);
+    var ray_seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces);
     var pixel_seed = init_random_seed(camera.samples * camera.bounces, camera.samples);
 
     for (var i = u32(0); i < camera.samples; i++) {
-        var ray_color = light.sky_color.rgb;
+        var ray_color = vec3(1.0);
         var jitter = vec2(0.5);
         if (i > 0) {
             jitter = vec2(random_float(&pixel_seed), random_float(&pixel_seed));
@@ -52,25 +73,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let in_uv = pixel_center / vec2(view.viewport.zw);
         let d = in_uv * 2.0 - 1.0;
 
-        let offset = camera.aperture / 2.0 * random_in_unit_disk(&seed);
-        let origin = camera.view_inverse * vec4(offset, 0.0, 1.0);
+        let offset = camera.aperture / 2.0 * random_in_unit_disk(&ray_seed);
+        var origin = camera.view_inverse * vec4(offset, 0.0, 1.0);
         let camera_target = camera.proj_inverse * vec4(d.x, d.y, 1.0, 1.0);
-        let direction = camera.view_inverse * vec4(normalize(camera_target.xyz * camera.focus_distance - vec3(offset, 0.0)), 0.0);
+        var direction = camera.view_inverse * vec4(normalize(camera_target.xyz * camera.focus_distance - vec3(offset, 0.0)), 0.0);
 
-        let hit = trace_ray(origin.xyz, direction.xyz, 0.001, 10000.0, RAY_FLAG_CULL_NO_OPAQUE | RAY_FLAG_SKIP_AABBS);
-        if hit.kind != RAY_QUERY_INTERSECTION_NONE {
-            let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
+        for (var b = u32(0); b <= camera.bounces; b++) {
+            if (b == camera.bounces) {
+                ray_color = vec3(0.0);
+                break;
+            }
 
-            let object = objects[hit.instance_custom_data];
-            let index = indices[object + hit.primitive_index];
-            let n0 = normals[index.x].xyz;
-            let n1 = normals[index.y].xyz;
-            let n2 = normals[index.z].xyz;
+            var hit_color = vec3(0.0);
 
-            let normal = n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z;
-            let world_normal = normalize((hit.world_to_object * vec4(normal, 1.0)).xyz);
+            let hit = trace_ray(origin.xyz, direction.xyz, 0.001, 10000.0, RAY_FLAG_NONE);
+            var scatter_direction = vec4(0.0);
+            if hit.kind != RAY_QUERY_INTERSECTION_NONE {
+                scatter_direction = closest_hit(hit, &hit_color, &ray_seed, direction.xyz);
+            } else {
+                scatter_direction = miss(hit, &hit_color);
+            }
 
-            ray_color = abs(n1);
+            ray_color *= hit_color;
+
+            if (scatter_direction.w > 0.0) {
+                origin = origin * hit.t * direction;
+                direction = vec4(scatter_direction.xyz, 0.0);
+            } else {
+                break;
+            }
         }
 
         pixel_color += ray_color;
@@ -87,6 +118,33 @@ fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ra
     rayQueryInitialize(&rq, tlas, ray);
     rayQueryProceed(&rq);
     return rayQueryGetCommittedIntersection(&rq);
+}
+
+fn closest_hit(hit: RayIntersection, hit_color: ptr<function, vec3<f32>>, seed: ptr<function, u32>, direction: vec3<f32>) -> vec4<f32> {
+    let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
+
+    let object = objects[hit.instance_custom_data];
+    let material = materials[material_map[object.material_id + hit.primitive_index]];
+    let index = indices[object.index + hit.primitive_index];
+    let n0 = normals[index.x].xyz;
+    let n1 = normals[index.y].xyz;
+    let n2 = normals[index.z].xyz;
+
+    let normal = n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z;
+
+    let light_coefficient = max(dot(-light.direction.xyz, normal), light.ambient.r);
+
+    let scatter = scatter_fn(material, hit.t, seed, normal, direction, hit_color);
+
+    *hit_color *= light_coefficient;
+
+    return scatter;
+}
+
+fn miss(hit: RayIntersection, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
+    *hit_color = light.sky_color.rgb;
+
+    return vec4(0.0, 0.0, 0.0, 0.0);
 }
 
 fn init_random_seed(val0: u32, val1: u32) -> u32 {
@@ -122,10 +180,119 @@ fn random_float(seed: ptr<function, u32>) -> f32 {
 fn random_in_unit_disk(seed: ptr<function, u32>) -> vec2<f32> {
     loop {
         let p = 2.0 * vec2(random_float(seed), random_float(seed)) - 1.0;
-        if (dot(p, p) < 1) {
+        if (dot(p, p) < 1.0) {
             return p;
         }
     }
 
     return vec2(0.0);
+}
+
+fn random_in_unit_sphere(seed: ptr<function, u32>) -> vec3<f32> {
+    loop {
+        let p = 2.0 * vec3(random_float(seed), random_float(seed), random_float(seed)) - 1.0;
+        if (dot(p, p) < 1.0) {
+            return p;
+        }
+    }
+
+    return vec3(0.0);
+}
+
+fn schlick(cosine: f32, refraction_index: f32) -> f32 {
+    var r0 = (1.0 - refraction_index) / (1.0 + refraction_index);
+    r0 *= r0;
+    return r0 + (1.0 - r0) * pow(1.0 - cosine, 5.0);
+}
+
+fn scatter_lambertian(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
+    var is_scattered = 0.0;
+    if (dot(direction, normal) < 0.0) {
+        is_scattered = 1.0;
+    }
+
+    *hit_color = material.diffuse.rgb;
+
+    return vec4(normal + random_in_unit_sphere(seed), is_scattered);
+}
+
+fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
+    let reflected = reflect(direction, normal);
+
+    var is_scattered = 0.0;
+    if (dot(reflected, normal) > 0.0) {
+        is_scattered = 1.0;
+    }
+
+    *hit_color = material.diffuse.rgb;
+
+    return vec4(reflected + material.fuzziness * random_in_unit_sphere(seed), is_scattered);
+}
+
+// TODO: broken dielectric, as always
+fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
+    let dot_value = dot(direction, normal);
+
+    var outward_normal = normal;
+    if (dot_value > 0.0) {
+        outward_normal = -normal;
+    }
+
+    var ni_over_nt = 1.0 / material.refraction_index;
+    if (dot_value > 0.0) {
+        ni_over_nt = material.refraction_index;
+    }
+
+    var cosine = -dot_value;
+    if (dot_value > 0.0) {
+        cosine = material.refraction_index * dot_value;
+    }
+
+    let refracted = refract(direction, outward_normal, ni_over_nt);
+    var reflect_probability = schlick(cosine, material.refraction_index);
+//    if (refracted < vec3(0.0) || refracted > vec3(0.0)) {
+//        reflect_probability = 1.0;
+//    }
+
+    let tex_color = vec4(1.0);
+    *hit_color = material.diffuse.rgb * tex_color.rgb;
+
+    var scatter = vec4(refracted, 1.0);
+    if (random_float(seed) < reflect_probability) {
+        scatter = vec4(reflect(direction, normal), 1.0);
+    }
+
+    return scatter;
+}
+
+fn scatter_diffuse_light(material: Material, t: f32, seed: ptr<function, u32>, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
+    *hit_color = material.diffuse.rgb;
+
+    return vec4(1.0, 0.0, 0.0, 0.0);
+}
+
+fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
+    let normalized_direction = normalize(direction);
+
+    switch (material.material_model) {
+        case 0: {
+            return scatter_lambertian(material, t, seed, normal, direction, hit_color);
+        }
+
+        case 1: {
+            return scatter_metallic(material, t, seed, normal, direction, hit_color);
+        }
+
+        case 2: {
+            return scatter_dielectric(material, t, seed, normal, direction, hit_color);
+        }
+
+        case 4: {
+            return scatter_diffuse_light(material, t, seed, hit_color);
+        }
+
+        case 3, default: {
+            return vec4(0.0);
+        }
+    }
 }
