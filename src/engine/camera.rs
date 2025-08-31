@@ -86,7 +86,7 @@ impl VoxelCamera {
 
 impl Default for VoxelCamera {
     fn default() -> Self {
-        Self::new(0.0, 3.4, 5, 50)
+        Self::new(0.0, 3.4, 10, 50)
     }
 }
 

@@ -45,10 +45,12 @@ use crate::engine::voxel::{
     RenderVoxelBlock, RenderVoxelType, VoxelBlock, VoxelMaterial, VoxelType,
 };
 use bevy::app::App;
+use bevy::image::ToExtents;
 use bevy::prelude::{
-    AssetApp, FromWorld, GlobalTransform, IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut,
-    Resource, UVec4, Vec4, World,
+    AssetApp, Commands, Component, Entity, FromWorld, GlobalTransform, IntoScheduleConfigs, Mat4,
+    Plugin, Query, Res, ResMut, Resource, UVec4, Vec4, With, World,
 };
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::extract_resource::ExtractResourcePlugin;
 use bevy::render::render_asset::{RenderAssetPlugin, prepare_assets};
@@ -58,10 +60,12 @@ use bevy::render::render_resource::binding_types::{
 use bevy::render::render_resource::{
     AccelerationStructureFlags, AccelerationStructureUpdateMode, BindGroup, BindGroupEntries,
     BindGroupLayout, BindGroupLayoutEntries, CommandEncoderDescriptor, CreateTlasDescriptor,
-    ShaderStages, StorageBuffer, StorageTextureAccess, TextureFormat, TlasInstance,
+    ShaderStages, StorageBuffer, StorageTextureAccess, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureUsages, TlasInstance,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::settings::WgpuFeatures;
+use bevy::render::texture::{CachedTexture, TextureCache};
 use bevy::render::view::ViewUniform;
 use bevy::render::{Render, RenderApp, RenderSystems};
 
@@ -125,6 +129,10 @@ impl Plugin for NEVRPlugin {
             .init_resource::<VoxelBindings>()
             .add_systems(
                 Render,
+                prepare_view_target.in_set(RenderSystems::PrepareResources),
+            )
+            .add_systems(
+                Render,
                 (
                     prepare_materials
                         .in_set(RenderSystems::PrepareAssets)
@@ -178,7 +186,7 @@ impl ToBytes for [u32] {
 #[derive(Resource)]
 pub struct VoxelBindings {
     pub bind_group: Option<BindGroup>,
-    pub bind_group_layouts: [BindGroupLayout; 2],
+    pub bind_group_layouts: [BindGroupLayout; 3],
 }
 
 impl FromWorld for VoxelBindings {
@@ -229,8 +237,60 @@ impl FromWorld for VoxelBindings {
                         ),
                     ),
                 ),
+                render_device.create_bind_group_layout(
+                    "voxel_denoiser_bind_group_layout",
+                    &BindGroupLayoutEntries::sequential(
+                        ShaderStages::COMPUTE,
+                        (
+                            // View output
+                            texture_storage_2d(
+                                TextureFormat::Rgba16Float,
+                                StorageTextureAccess::WriteOnly,
+                            ),
+                            // View input
+                            texture_storage_2d(
+                                TextureFormat::Rgba16Float,
+                                StorageTextureAccess::ReadOnly,
+                            ),
+                            // View
+                            uniform_buffer::<ViewUniform>(true),
+                        ),
+                    ),
+                ),
             ],
         }
+    }
+}
+
+/// Texture view target used for rendering.
+#[derive(Component)]
+pub struct VoxelViewTarget(pub CachedTexture);
+
+fn prepare_view_target(
+    query: Query<(Entity, &ExtractedCamera), With<RayCamera>>,
+    mut texture_cache: ResMut<TextureCache>,
+    render_device: Res<RenderDevice>,
+    mut commands: Commands,
+) {
+    for (entity, camera) in query {
+        let Some(viewport) = camera.physical_viewport_size else {
+            continue;
+        };
+
+        let descriptor = TextureDescriptor {
+            label: Some("voxel_raytracing_view_target"),
+            size: viewport.to_extents(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        };
+
+        commands.entity(entity).insert(VoxelViewTarget(
+            texture_cache.get(&render_device, descriptor),
+        ));
     }
 }
 
