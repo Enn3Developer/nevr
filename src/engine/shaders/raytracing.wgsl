@@ -1,9 +1,6 @@
 #import bevy_render::view::View
 
 struct Camera {
-    view_proj: mat4x4<f32>,
-    view_inverse: mat4x4<f32>,
-    proj_inverse: mat4x4<f32>,
     aperture: f32,
     focus_distance: f32,
     samples: u32,

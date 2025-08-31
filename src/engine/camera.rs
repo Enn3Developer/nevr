@@ -1,12 +1,9 @@
 //! This module contains the camera needed to render voxels for NEVR.
 
-use crate::ToBytes;
 use bevy::camera::CameraMainTextureUsages;
 use bevy::core_pipeline::core_3d::graph::Core3d;
 use bevy::ecs::query::QueryItem;
-use bevy::prelude::{
-    Camera, Camera2d, Component, GlobalTransform, Msaa, PerspectiveProjection, Projection,
-};
+use bevy::prelude::{Camera, Camera2d, Component, Msaa, PerspectiveProjection, Projection};
 use bevy::render::camera::CameraRenderGraph;
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::encase::internal::{
@@ -94,11 +91,7 @@ impl Default for VoxelCamera {
 }
 
 impl ExtractComponent for VoxelCamera {
-    type QueryData = (
-        &'static VoxelCamera,
-        &'static GlobalTransform,
-        &'static Projection,
-    );
+    type QueryData = &'static VoxelCamera;
     type QueryFilter = ();
     type Out = RayCamera;
 
@@ -110,29 +103,15 @@ impl ExtractComponent for VoxelCamera {
 #[derive(Debug, Pod, Zeroable, Copy, Clone, Component, Default)]
 #[repr(C)]
 pub struct RayCamera {
-    view_proj: [f32; 16],
-    view_inverse: [f32; 16],
-    proj_inverse: [f32; 16],
     aperture: f32,
     focus_distance: f32,
     samples: u32,
     bounces: u32,
 }
 
-impl<
-    C: Deref<Target = VoxelCamera>,
-    T: Deref<Target = GlobalTransform>,
-    P: Deref<Target = Projection>,
-> From<(C, T, P)> for RayCamera
-{
-    fn from((camera, transform, projection): (C, T, P)) -> Self {
-        let mut projection = projection.get_clip_from_view();
-        projection.y_axis.y *= -1.0;
-        let view = transform.to_matrix();
+impl<C: Deref<Target = VoxelCamera>> From<C> for RayCamera {
+    fn from(camera: C) -> Self {
         RayCamera {
-            view_proj: (projection * view).to_cols_array(),
-            view_inverse: view.inverse().to_cols_array(),
-            proj_inverse: projection.inverse().to_cols_array(),
             aperture: camera.aperture,
             focus_distance: camera.focus_distance,
             samples: camera.samples,
@@ -144,9 +123,9 @@ impl<
 impl ShaderType for RayCamera {
     type ExtraMetadata = ();
     const METADATA: Metadata<Self::ExtraMetadata> = Metadata {
-        alignment: AlignmentValue::new(16),
+        alignment: AlignmentValue::new(4),
         has_uniform_min_alignment: false,
-        min_size: SizeValue::new(320),
+        min_size: SizeValue::new(16),
         is_pod: false,
         extra: (),
     };
@@ -157,9 +136,6 @@ impl WriteInto for RayCamera {
     where
         B: BufferMut,
     {
-        writer.write_slice(self.view_proj.to_bytes());
-        writer.write_slice(self.view_inverse.to_bytes());
-        writer.write_slice(self.proj_inverse.to_bytes());
         writer.write(&self.aperture.to_le_bytes());
         writer.write(&self.focus_distance.to_le_bytes());
         writer.write(&self.samples.to_le_bytes());
