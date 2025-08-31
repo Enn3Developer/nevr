@@ -3,7 +3,7 @@
 use crate::ToBytes;
 use crate::engine::voxel::{RenderVoxelType, VoxelMaterial, VoxelType};
 use bevy::platform::collections::HashMap;
-use bevy::prelude::{AssetId, Res, ResMut, Resource, Transform, Vec3};
+use bevy::prelude::{AssetId, Res, ResMut, Resource, Transform, UVec4, Vec3};
 use bevy::render::render_asset::ExtractedAssets;
 use bevy::render::render_resource::encase::internal::{
     AlignmentValue, BufferMut, WriteInto, Writer,
@@ -162,7 +162,7 @@ pub struct GeometryManager {
     added_materials: Vec<AssetId<VoxelMaterial>>,
 
     vertices: BufferVec<f32>,
-    indices: BufferVec<u32>,
+    indices: BufferVec<UVec4>,
     normals: BufferVec<f32>,
     materials: BufferVec<VoxelMaterial>,
     material_map: BufferVec<u32>,
@@ -185,7 +185,7 @@ impl GeometryManager {
         &self.vertices
     }
 
-    pub fn indices(&self) -> &BufferVec<u32> {
+    pub fn indices(&self) -> &BufferVec<UVec4> {
         &self.indices
     }
 
@@ -261,6 +261,7 @@ pub fn prepare_geometry(
     }
 
     let mut new_additions = false;
+    let mut global_offset = geometry_manager.indices.len() as u32;
 
     for (id, voxel_type) in &voxel_types.extracted {
         let size = 1.0 / voxel_type.size() as f32;
@@ -269,7 +270,6 @@ pub fn prepare_geometry(
         let mut indices = Vec::with_capacity(INDICES.len() * voxels.len());
         let mut offset = 0;
         // divided by 4 because in the shader we use a vec4 for indices
-        let global_offset = geometry_manager.indices.len() as u32 / 4;
 
         let added = geometry_manager.added_types.contains(id);
         new_additions |= !added;
@@ -323,16 +323,14 @@ pub fn prepare_geometry(
 
                     geometry_manager.material_map.push(material_id);
 
-                    geometry_manager.indices.push(
-                        indices_array[0] + offset * (VERTICES.len() as u32 / 3) + global_offset,
+                    let index_offset = offset * (VERTICES.len() as u32 / 3) + global_offset * 2;
+                    let index = UVec4::new(
+                        indices_array[0] + index_offset,
+                        indices_array[1] + index_offset,
+                        indices_array[2] + index_offset,
+                        0,
                     );
-                    geometry_manager.indices.push(
-                        indices_array[1] + offset * (VERTICES.len() as u32 / 3) + global_offset,
-                    );
-                    geometry_manager.indices.push(
-                        indices_array[2] + offset * (VERTICES.len() as u32 / 3) + global_offset,
-                    );
-                    geometry_manager.indices.push(0);
+                    geometry_manager.indices.push(index);
                 }
             }
 
@@ -381,6 +379,8 @@ pub fn prepare_geometry(
 
         geometry_manager.geometries_vertices.insert(*id, vertices);
         geometry_manager.geometries_indices.insert(*id, indices);
+
+        global_offset += voxels.len() as u32 * INDICES.len() as u32 / 3;
     }
 }
 
