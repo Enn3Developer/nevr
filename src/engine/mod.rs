@@ -6,6 +6,7 @@
 pub mod blas;
 pub mod camera;
 pub mod color;
+pub mod denoiser;
 pub mod geometry;
 pub mod light;
 pub mod node;

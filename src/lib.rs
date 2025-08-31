@@ -38,6 +38,7 @@ pub mod engine;
 
 use crate::engine::blas::{BlasManager, compact_blas, prepare_blas};
 use crate::engine::camera::{RayCamera, VoxelCamera};
+use crate::engine::denoiser::DenoiserPlugin;
 use crate::engine::geometry::{GeometryManager, RenderObject, prepare_geometry, prepare_materials};
 use crate::engine::light::{RenderVoxelLight, VoxelLight};
 use crate::engine::node::NEVRNodeRender;
@@ -96,7 +97,7 @@ impl NEVRPlugin {
 // TODO: add better checking in the code to avoid bevy/wgpu panics to better inform users of errors in their code
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(NEVRNodeRender)
+        app.add_plugins((NEVRNodeRender, DenoiserPlugin))
             .add_plugins(ExtractResourcePlugin::<RenderVoxelLight>::default())
             .add_plugins(RenderAssetPlugin::<VoxelMaterial>::default())
             .add_plugins(RenderAssetPlugin::<RenderVoxelType>::default())

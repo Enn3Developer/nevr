@@ -7,8 +7,7 @@ use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::ecs::query::QueryItem;
-use bevy::image::ToExtents;
-use bevy::prelude::{AssetServer, FromWorld, Plugin, World};
+use bevy::prelude::{FromWorld, Plugin, World};
 use bevy::render::RenderApp;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::render_graph::{
@@ -19,14 +18,13 @@ use bevy::render::render_resource::{
     DynamicUniformBuffer, PipelineCache,
 };
 use bevy::render::renderer::{RenderContext, RenderQueue};
-use bevy::render::view::{ViewTarget, ViewUniformOffset, ViewUniforms};
+use bevy::render::view::{ViewUniformOffset, ViewUniforms};
 
 pub struct NEVRNodeRender;
 
 impl Plugin for NEVRNodeRender {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/raytracing.wgsl");
-        embedded_asset!(app, "shaders/denoiser.wgsl");
     }
 
     fn finish(&self, app: &mut App) {
@@ -46,7 +44,6 @@ pub struct NEVRNodeLabel;
 
 pub struct NEVRNode {
     pipeline: CachedComputePipelineId,
-    denoise_pipeline: CachedComputePipelineId,
 }
 
 impl FromWorld for NEVRNode {
@@ -61,23 +58,12 @@ impl FromWorld for NEVRNode {
             ..Default::default()
         });
 
-        let denoise_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("voxel_denoise_pipeline".into()),
-            layout: voxel_bindings.bind_group_layouts[2..].to_vec(),
-            shader: load_embedded_asset!(world, "shaders/denoiser.wgsl"),
-            ..Default::default()
-        });
-
-        Self {
-            pipeline,
-            denoise_pipeline,
-        }
+        Self { pipeline }
     }
 }
 
 impl ViewNode for NEVRNode {
     type ViewQuery = (
-        &'static ViewTarget,
         &'static ExtractedCamera,
         &'static RayCamera,
         &'static ViewUniformOffset,
@@ -88,7 +74,7 @@ impl ViewNode for NEVRNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (view_target, extracted_camera, camera, view_uniform_offset, voxel_view_target): QueryItem<
+        (extracted_camera, camera, view_uniform_offset, voxel_view_target): QueryItem<
             'w,
             '_,
             Self::ViewQuery,
@@ -105,14 +91,6 @@ impl ViewNode for NEVRNode {
             eprintln!(
                 "{:?}",
                 pipeline_cache.get_compute_pipeline_state(self.pipeline)
-            );
-            return Ok(());
-        };
-        let Some(denoise_pipeline) = pipeline_cache.get_compute_pipeline(self.denoise_pipeline)
-        else {
-            eprintln!(
-                "{:?}",
-                pipeline_cache.get_compute_pipeline_state(self.denoise_pipeline)
             );
             return Ok(());
         };
@@ -147,16 +125,6 @@ impl ViewNode for NEVRNode {
             )),
         );
 
-        let denoise_bind_group = render_context.render_device().create_bind_group(
-            "voxel_bindings_denoise",
-            &voxel_bindings.bind_group_layouts[2],
-            &BindGroupEntries::sequential((
-                view_target.get_unsampled_color_attachment().view,
-                &voxel_view_target.0.default_view,
-                view_uniforms,
-            )),
-        );
-
         let command_encoder = render_context.command_encoder();
 
         let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -167,10 +135,6 @@ impl ViewNode for NEVRNode {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.set_bind_group(1, &camera_bind_group, &[view_uniform_offset.offset]);
-        pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
-
-        pass.set_pipeline(denoise_pipeline);
-        pass.set_bind_group(0, &denoise_bind_group, &[view_uniform_offset.offset]);
         pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
 
         Ok(())
