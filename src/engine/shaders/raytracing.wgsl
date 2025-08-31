@@ -107,6 +107,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 break;
             }
 
+            if (attenuation < 0.001) {
+                break;
+            }
+
             b += 1;
         }
 
