@@ -63,7 +63,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     var pixel_color = vec3(0.0);
-    var ray_seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces);
+    var ray_seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces * view.frame_count);
     var pixel_seed = init_random_seed(camera.samples * camera.bounces, camera.samples);
 
     for (var i = u32(0); i < camera.samples; i++) {
@@ -92,12 +92,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_CULL_BACK_FACING);
             var hit_desc = HitDesc(vec3(1.0), vec3(0.0), false);
             if hit.kind != RAY_QUERY_INTERSECTION_NONE {
-                hit_desc = closest_hit(hit, &ray_seed, origin, direction);
+                hit_desc = closest_hit(hit, &ray_seed, origin, direction, attenuation);
             } else {
                 hit_desc = miss(hit, direction);
             }
 
-            ray_color *= attenuation * hit_desc.color;
+            ray_color *= hit_desc.color;
+            attenuation *= 0.25;
 
             if (hit_desc.scatter) {
                 origin = origin + hit.t * direction;
@@ -125,7 +126,7 @@ fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ra
     return rayQueryGetCommittedIntersection(&rq);
 }
 
-fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>, direction: vec3<f32>) -> HitDesc {
+fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>, direction: vec3<f32>, attenuation: f32) -> HitDesc {
     let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
 
     let object = objects[hit.instance_custom_data];
@@ -140,7 +141,7 @@ fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>
 
     let light_coefficient = max(dot(-light.direction.xyz, world_normal), light.ambient.r);
 
-    var hit_desc = scatter_fn(material, hit.t, seed, world_normal, direction);
+    var hit_desc = scatter_fn(material, hit.t, seed, world_normal, direction, attenuation);
 
     hit_desc.color *= light_coefficient;
 
@@ -222,9 +223,9 @@ fn schlick(cosine: f32, refraction_index: f32) -> f32 {
     return r0 + (1.0 - r0) * pow(1.0 - cosine, 5.0);
 }
 
-fn scatter_lambertian(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
+fn scatter_lambertian(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, attenuation: f32) -> HitDesc {
     let scatter = dot(direction, normal) < 0.0;
-    let color = material.diffuse.rgb;
+    let color = material.diffuse.rgb * attenuation;
     let scatter_direction = normal + random_in_unit_sphere(seed);
 
     return HitDesc(color, normalize(scatter_direction), scatter);
@@ -280,10 +281,10 @@ fn scatter_diffuse_light(material: Material, t: f32, seed: ptr<function, u32>) -
     return HitDesc(color, vec3(0.0), false);
 }
 
-fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
+fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, attenuation: f32) -> HitDesc {
     switch (material.material_model) {
         case 0: {
-            return scatter_lambertian(material, t, seed, normal, direction);
+            return scatter_lambertian(material, t, seed, normal, direction, attenuation);
         }
 
         case 1: {
