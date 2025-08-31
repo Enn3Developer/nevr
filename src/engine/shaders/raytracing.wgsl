@@ -80,32 +80,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let d = in_uv * 2.0 - 1.0;
 
         let offset = camera.aperture / 2.0 * random_in_unit_disk(&ray_seed);
-        var origin = camera.view_inverse * vec4(offset, 0.0, 1.0);
-        let camera_target = camera.proj_inverse * vec4(d.x, d.y, 1.0, 1.0);
-        var direction = camera.view_inverse * vec4(normalize(camera_target.xyz * camera.focus_distance - vec3(offset, 0.0)), 0.0);
+        var origin = view.world_position;
+        let camera_target = view.world_from_clip * vec4(d.x, -d.y, 1.0, 1.0);
+        var direction = normalize((camera_target.xyz / camera_target.w) - origin);
+        var b = u32(0);
+        var attenuation = 1.0;
 
-        for (var b = u32(0); b <= camera.bounces; b++) {
+        loop {
             if (b == camera.bounces) {
                 ray_color = vec3(0.0);
                 break;
             }
 
-            let hit = trace_ray(origin.xyz, direction.xyz, 0.001, 10000.0, RAY_FLAG_NONE);
-            var hit_desc = HitDesc(vec3(0.0), vec3(0.0), false);
+            let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_CULL_BACK_FACING);
+            var hit_desc = HitDesc(vec3(1.0), vec3(0.0), false);
             if hit.kind != RAY_QUERY_INTERSECTION_NONE {
-                hit_desc = closest_hit(hit, &ray_seed, direction.xyz);
+                hit_desc = closest_hit(hit, &ray_seed, origin, direction);
             } else {
-                hit_desc = miss(hit);
+                hit_desc = miss(hit, direction);
             }
 
-            ray_color *= hit_desc.color;
+            ray_color *= attenuation * hit_desc.color;
 
-            if (hit.t >= 0.0 && hit_desc.scatter) {
-                origin = origin * hit.t * direction;
-                direction = vec4(hit_desc.scatter_direction, 0.0);
+            if (hit_desc.scatter) {
+                origin = origin + hit.t * direction;
+                direction = hit_desc.scatter_direction;
             } else {
                 break;
             }
+
+            b += 1;
         }
 
         pixel_color += ray_color;
@@ -124,7 +128,7 @@ fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ra
     return rayQueryGetCommittedIntersection(&rq);
 }
 
-fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, direction: vec3<f32>) -> HitDesc {
+fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>, direction: vec3<f32>) -> HitDesc {
     let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
 
     let object = objects[hit.instance_custom_data];
@@ -134,18 +138,30 @@ fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, direction: vec3<f
     let n1 = normals[index.y].xyz;
     let n2 = normals[index.z].xyz;
 
-    let normal = n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z;
+    let normal = mat3x3(n0, n1, n2) * barycentrics;
+    let world_normal = normalize(mat3x3(hit.object_to_world[0].xyz, hit.object_to_world[1].xyz, hit.object_to_world[2].xyz) * normal);
 
-    let light_coefficient = max(dot(-light.direction.xyz, normal), light.ambient.r);
+    let light_coefficient = max(dot(-light.direction.xyz, world_normal), light.ambient.r);
 
-    var hit_desc = scatter_fn(material, hit.t, seed, normal, direction);
+    var hit_desc = scatter_fn(material, hit.t, seed, world_normal, direction);
 
     hit_desc.color *= light_coefficient;
+
+    if (dot(normal, -light.direction.xyz) > 0.0) {
+        let shadow_origin = origin + hit.t * direction;
+        let shadow_direction = -light.direction.xyz;
+        let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
+        let shadow_hit = trace_ray(shadow_origin, shadow_direction, 0.001, 10000.0, flags);
+        // shadowed
+        if (shadow_hit.kind != RAY_QUERY_INTERSECTION_NONE) {
+            hit_desc.color *= light.ambient.rgb;
+        }
+    }
 
     return hit_desc;
 }
 
-fn miss(hit: RayIntersection) -> HitDesc {
+fn miss(hit: RayIntersection, direction: vec3<f32>) -> HitDesc {
     let color = light.sky_color.rgb;
 
     return HitDesc(color, vec3(0.0), false);
@@ -200,7 +216,7 @@ fn random_in_unit_sphere(seed: ptr<function, u32>) -> vec3<f32> {
         }
     }
 
-    return vec3(0.0);
+    return normalize(vec3(1.0));
 }
 
 fn schlick(cosine: f32, refraction_index: f32) -> f32 {
@@ -214,7 +230,7 @@ fn scatter_lambertian(material: Material, t: f32, seed: ptr<function, u32>, norm
     let color = material.diffuse.rgb;
     let scatter_direction = normal + random_in_unit_sphere(seed);
 
-    return HitDesc(color, scatter_direction, scatter);
+    return HitDesc(color, normalize(scatter_direction), scatter);
 }
 
 fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
@@ -223,44 +239,43 @@ fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal
     let color = material.diffuse.rgb;
     let scatter_direction = reflected + material.fuzziness * random_in_unit_sphere(seed);
 
-    return HitDesc(color, scatter_direction, scatter);
+    return HitDesc(color, normalize(scatter_direction), scatter);
 }
 
-// TODO: broken dielectric, as always
-//fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, hit_color: ptr<function, vec3<f32>>) -> vec4<f32> {
-//    let dot_value = dot(direction, normal);
-//
-//    var outward_normal = normal;
-//    if (dot_value > 0.0) {
-//        outward_normal = -normal;
-//    }
-//
-//    var ni_over_nt = 1.0 / material.refraction_index;
-//    if (dot_value > 0.0) {
-//        ni_over_nt = material.refraction_index;
-//    }
-//
-//    var cosine = -dot_value;
-//    if (dot_value > 0.0) {
-//        cosine = material.refraction_index * dot_value;
-//    }
-//
-//    let refracted = refract(direction, outward_normal, ni_over_nt);
-//    var reflect_probability = schlick(cosine, material.refraction_index);
-////    if (refracted < vec3(0.0) || refracted > vec3(0.0)) {
-////        reflect_probability = 1.0;
-////    }
-//
-//    let tex_color = vec4(1.0);
-//    *hit_color = material.diffuse.rgb * tex_color.rgb;
-//
-//    var scatter = vec4(refracted, 1.0);
-//    if (random_float(seed) < reflect_probability) {
-//        scatter = vec4(reflect(direction, normal), 1.0);
-//    }
-//
-//    return scatter;
-//}
+fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
+    let scatter = true;
+    let dot_value = dot(direction, normal);
+
+    var outward_normal = normal;
+    if (dot_value > 0.0) {
+        outward_normal = -normal;
+    }
+
+    var ni_over_nt = 1.0 / material.refraction_index;
+    if (dot_value > 0.0) {
+        ni_over_nt = material.refraction_index;
+    }
+
+    var cosine = -dot_value;
+    if (dot_value > 0.0) {
+        cosine = material.refraction_index * dot_value;
+    }
+
+    let refracted = refract(direction, outward_normal, ni_over_nt);
+    var reflect_probability = 1.0;
+    if (any(refracted != vec3(0.0))) {
+        reflect_probability = schlick(cosine, material.refraction_index);
+    }
+
+    let color = material.diffuse.rgb;
+
+    var scatter_direction = refracted;
+    if (random_float(seed) < reflect_probability) {
+        scatter_direction = reflect(direction, normal);
+    }
+
+    return HitDesc(color, normalize(scatter_direction), scatter);
+}
 
 fn scatter_diffuse_light(material: Material, t: f32, seed: ptr<function, u32>) -> HitDesc {
     let color = material.diffuse.rgb;
@@ -269,20 +284,18 @@ fn scatter_diffuse_light(material: Material, t: f32, seed: ptr<function, u32>) -
 }
 
 fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
-    let normalized_direction = normalize(direction);
-
     switch (material.material_model) {
         case 0: {
-            return scatter_lambertian(material, t, seed, normal, normalized_direction);
+            return scatter_lambertian(material, t, seed, normal, direction);
         }
 
         case 1: {
-            return scatter_metallic(material, t, seed, normal, normalized_direction);
+            return scatter_metallic(material, t, seed, normal, direction);
         }
 
-//        case 2: {
-//            return scatter_dielectric(material, t, seed, normal, direction, hit_color);
-//        }
+        case 2: {
+            return scatter_dielectric(material, t, seed, normal, direction);
+        }
 
         case 4: {
             return scatter_diffuse_light(material, t, seed);
