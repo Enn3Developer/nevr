@@ -23,14 +23,18 @@ use bevy::render::view::{ViewTarget, ViewUniformOffset, ViewUniforms};
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 pub struct DenoiserLabel;
 
-/// Describes the denoiser to use for the rendering pipeline.
+/// Describes the denoiser to use for the rendering pipeline. It is recommended to try the various denoiser for
+/// your particular scene.
 ///
 /// Quick summary:
 /// - None: No denoiser.
-/// - Simple: The simplest and fastest denoiser, worst quality.
+/// - Simple: The simplest and fastest denoiser, decent quality.
 /// - NLM: Fast, and decent quality.
 ///
 /// Defaults to [VoxelDenoiser::None].
+///
+/// **Note:** By changing the samples count in [crate::engine::camera::VoxelCamera] the resulted denoise
+/// image may vary by a lot.
 #[derive(Resource, ExtractResource, Clone, Copy, Debug, Default)]
 pub enum VoxelDenoiser {
     /// Doesn't enable the denoiser pass
@@ -38,8 +42,8 @@ pub enum VoxelDenoiser {
     None,
     /// The simplest denoiser, it's really fast but has the worst quality.
     Simple,
-    /// A bit more sophisticated denoiser than the simple one, still fast enough and has better
-    /// quality compared to that, but it still may present some noise and graphical glitches
+    /// A bit more sophisticated denoiser than the simple one, still fast enough and may have better
+    /// quality compared to that, but it still presents some noise and graphical glitches
     NLM,
 }
 
