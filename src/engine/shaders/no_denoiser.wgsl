@@ -1,7 +1,7 @@
 #import bevy_render::view::View
 
 @group(0) @binding(0) var view_output: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(1) var view_input: texture_storage_2d<rgba16float, read>;
+@group(0) @binding(1) var view_input: texture_storage_2d<rgba16float, read_write>;
 @group(0) @binding(2) var<uniform> view: View;
 
 @compute @workgroup_size(8, 8, 1)

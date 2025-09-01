@@ -36,6 +36,8 @@ struct HitDesc {
     color: vec3<f32>,
     scatter_direction: vec3<f32>,
     scatter: bool,
+    dist_sign: i32,
+    albedo: vec3<f32>,
 }
 
 const RAY_T_MIN = 0.01f;
@@ -62,12 +64,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    var pixel_color = vec3(0.0);
+    var pixel_color = vec4(0.0);
     var ray_seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces * view.frame_count);
     var pixel_seed = init_random_seed(camera.samples * camera.bounces, camera.samples);
 
     for (var i = u32(0); i < camera.samples; i++) {
-        var ray_color = vec3(1.0);
+        var ray_color = vec4(1.0, 1.0, 1.0, 0.0);
         var jitter = vec2(0.5);
         if (i > 0) {
             jitter = vec2(random_float(&pixel_seed), random_float(&pixel_seed));
@@ -85,20 +87,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         loop {
             if (b == camera.bounces) {
-                ray_color = vec3(0.0);
+                ray_color = vec4(0.0);
                 break;
             }
 
             let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_CULL_BACK_FACING);
-            var hit_desc = HitDesc(vec3(1.0), vec3(0.0), false);
+
+            var hit_desc = HitDesc(vec3(1.0), vec3(0.0), false, 1, vec3(0.0));
             if hit.kind != RAY_QUERY_INTERSECTION_NONE {
                 hit_desc = closest_hit(hit, &ray_seed, origin, direction, attenuation);
+                if (ray_color.a >= 0.0) {
+                    ray_color.a = ray_color.a + hit.t;
+                }
             } else {
                 hit_desc = miss(hit, direction);
             }
 
-            ray_color *= hit_desc.color;
+            if (ray_color.a > 0.0) {
+               ray_color.a += length(hit_desc.color * vec3(313.0,513.0,713.0));
+            }
+
+            ray_color = vec4(ray_color.rgb * hit_desc.color, ray_color.a);
             attenuation *= 0.25;
+            ray_color.a = f32(hit_desc.dist_sign) * abs(ray_color.a);
 
             if (hit_desc.scatter) {
                 origin = origin + hit.t * direction;
@@ -114,12 +125,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             b += 1;
         }
 
+        ray_color.a = abs(ray_color.a);
         pixel_color += ray_color;
     }
 
     pixel_color = pixel_color / f32(camera.samples);
 
-    textureStore(view_output, global_id.xy, vec4(pixel_color, 1.0));
+    textureStore(view_output, global_id.xy, pixel_color);
 }
 
 fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32) -> RayIntersection {
@@ -166,7 +178,7 @@ fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>
 fn miss(hit: RayIntersection, direction: vec3<f32>) -> HitDesc {
     let color = light.sky_color.rgb;
 
-    return HitDesc(color, vec3(0.0), false);
+    return HitDesc(color, vec3(0.0), false, 1, vec3(0.0));
 }
 
 fn init_random_seed(val0: u32, val1: u32) -> u32 {
@@ -232,7 +244,7 @@ fn scatter_lambertian(material: Material, t: f32, seed: ptr<function, u32>, norm
     let color = material.diffuse.rgb * attenuation;
     let scatter_direction = normal + random_in_unit_sphere(seed);
 
-    return HitDesc(color, normalize(scatter_direction), scatter);
+    return HitDesc(color, normalize(scatter_direction), scatter, -1, vec3(0.0));
 }
 
 fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
@@ -241,7 +253,7 @@ fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal
     let color = material.diffuse.rgb;
     let scatter_direction = reflected + material.fuzziness * random_in_unit_sphere(seed);
 
-    return HitDesc(color, normalize(scatter_direction), scatter);
+    return HitDesc(color, normalize(scatter_direction), scatter, 1, vec3(0.0));
 }
 
 fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
@@ -276,13 +288,13 @@ fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, norm
         scatter_direction = reflect(direction, normal);
     }
 
-    return HitDesc(color, normalize(scatter_direction), scatter);
+    return HitDesc(color, normalize(scatter_direction), scatter, 1, vec3(0.0));
 }
 
 fn scatter_diffuse_light(material: Material, t: f32, seed: ptr<function, u32>) -> HitDesc {
     let color = material.diffuse.rgb;
 
-    return HitDesc(color, vec3(0.0), false);
+    return HitDesc(color, vec3(0.0), false, 1, vec3(0.0));
 }
 
 fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>, attenuation: f32) -> HitDesc {
@@ -304,7 +316,7 @@ fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3
         }
 
         default: {
-            return HitDesc(vec3(1.0, 0.0, 1.0), vec3(0.0), false);
+            return HitDesc(vec3(1.0, 0.0, 1.0), vec3(0.0), false, 1, vec3(0.0));
         }
     }
 }

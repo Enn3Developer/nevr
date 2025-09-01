@@ -251,7 +251,7 @@ impl FromWorld for VoxelBindings {
                             // View input
                             texture_storage_2d(
                                 TextureFormat::Rgba16Float,
-                                StorageTextureAccess::ReadOnly,
+                                StorageTextureAccess::ReadWrite,
                             ),
                             // View
                             uniform_buffer::<ViewUniform>(true),
