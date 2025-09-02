@@ -1,13 +1,13 @@
 //! This module contains all the necessary structs to create blocks.
 
 use crate::ToBytes;
-use crate::engine::color::{IntoRgba, VoxelColor};
 use bevy::asset::AssetId;
 use bevy::ecs::query::QueryItem;
 use bevy::ecs::system::SystemParamItem;
 use bevy::ecs::system::lifetimeless::SRes;
 use bevy::prelude::{
-    Asset, Component, GlobalTransform, Handle, Transform, TypePath, Vec3, Visibility,
+    Asset, Color, ColorToComponents, Component, GlobalTransform, Handle, Srgba, Transform,
+    TypePath, Vec3, Visibility,
 };
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
@@ -17,7 +17,6 @@ use bevy::render::render_resource::encase::internal::{
 };
 use bevy::render::render_resource::encase::private::{Metadata, SizeValue};
 use bevy::render::renderer::RenderDevice;
-use bytemuck::{Pod, Zeroable};
 
 /// Describes the model to use for a material, used in [VoxelMaterial].
 pub enum VoxelMaterialModel {
@@ -58,10 +57,10 @@ impl From<VoxelMaterialModel> for u32 {
 /// ```rs
 /// let handle = asset_server.add(VoxelMaterial::new_lambertian(VoxelColor::RGBA(1.0, 1.0, 1.0, 1.0)));
 /// ```
-#[derive(Asset, TypePath, Clone, Copy, Zeroable, Pod)]
+#[derive(Asset, TypePath, Clone, Copy)]
 #[repr(C)]
 pub struct VoxelMaterial {
-    diffuse: [f32; 4],
+    diffuse: Srgba,
     _diffuse_texture_id: i32,
     fuzziness: f32,
     refraction_index: f32,
@@ -70,7 +69,7 @@ pub struct VoxelMaterial {
 
 impl VoxelMaterial {
     pub fn new(
-        diffuse: [f32; 4],
+        diffuse: Srgba,
         fuzziness: f32,
         refraction_index: f32,
         material_model: VoxelMaterialModel,
@@ -87,21 +86,16 @@ impl VoxelMaterial {
     /// Creates a new lambertian material.
     ///
     /// Check [VoxelMaterialModel::Lambertian] for more information.
-    pub fn new_lambertian(diffuse: VoxelColor) -> Self {
-        Self::new(
-            diffuse.into_rgba(),
-            0.0,
-            0.0,
-            VoxelMaterialModel::Lambertian,
-        )
+    pub fn new_lambertian(diffuse: Color) -> Self {
+        Self::new(diffuse.to_srgba(), 0.0, 0.0, VoxelMaterialModel::Lambertian)
     }
 
     /// Creates a new metallic material.
     ///
     /// Check [VoxelMaterialModel::Metallic] for more information.
-    pub fn new_metallic(diffuse: VoxelColor, fuzziness: f32) -> Self {
+    pub fn new_metallic(diffuse: Color, fuzziness: f32) -> Self {
         Self::new(
-            diffuse.into_rgba(),
+            diffuse.to_srgba(),
             fuzziness,
             0.0,
             VoxelMaterialModel::Metallic,
@@ -111,9 +105,9 @@ impl VoxelMaterial {
     /// Creates a new dielectric material.
     ///
     /// Check [VoxelMaterialModel::Dielectric] for more information.
-    pub fn new_dielectric(diffuse: VoxelColor, refraction_index: f32) -> Self {
+    pub fn new_dielectric(diffuse: Color, refraction_index: f32) -> Self {
         Self::new(
-            diffuse.into_rgba(),
+            diffuse.to_srgba(),
             0.0,
             refraction_index,
             VoxelMaterialModel::Dielectric,
@@ -123,12 +117,12 @@ impl VoxelMaterial {
     /// Creates a new emissive material.
     ///
     /// Check [VoxelMaterialModel::DiffuseLight] for more information.
-    pub fn new_diffuse_light(diffuse: VoxelColor, brightness: f32) -> Self {
-        let mut diffuse = diffuse.into_rgba();
-        diffuse[0] *= brightness;
-        diffuse[1] *= brightness;
-        diffuse[2] *= brightness;
-        diffuse[3] *= brightness;
+    pub fn new_diffuse_light(diffuse: Color, brightness: f32) -> Self {
+        let mut diffuse = diffuse.to_srgba();
+        diffuse.red *= brightness;
+        diffuse.green *= brightness;
+        diffuse.blue *= brightness;
+        diffuse.alpha *= brightness;
 
         Self::new(diffuse, 0.0, 0.0, VoxelMaterialModel::DiffuseLight)
     }
@@ -164,7 +158,7 @@ impl WriteInto for VoxelMaterial {
     where
         B: BufferMut,
     {
-        writer.write_slice(self.diffuse.to_bytes());
+        writer.write_slice(self.diffuse.to_f32_array().to_bytes());
         writer.write_slice(&self._diffuse_texture_id.to_le_bytes());
         writer.write_slice(&self.fuzziness.to_le_bytes());
         writer.write_slice(&self.refraction_index.to_le_bytes());

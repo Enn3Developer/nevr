@@ -31,6 +31,7 @@ use std::ops::Deref;
         TextureUsages::RENDER_ATTACHMENT
         | TextureUsages::TEXTURE_BINDING
         | TextureUsages::COPY_SRC
+        | TextureUsages::COPY_DST
         | TextureUsages::STORAGE_BINDING
     ),
     Projection::Perspective(

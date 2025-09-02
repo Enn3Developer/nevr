@@ -3,10 +3,10 @@
 //! Example usage of NEVR (spawns a block composed of only one white voxel and spawns a camera to render it):
 //! ```
 //! use bevy::DefaultPlugins;
-//! use bevy::prelude::{App, Startup, Commands, Res, AssetServer, Vec3};
+//! use bevy::prelude::{App, Startup, Commands, Res, AssetServer, Vec3, Color};
 //! use nevr::NEVRPlugin;
-//! use nevr::engine::color::VoxelColor;
 //! use nevr::engine::camera::VoxelCamera;
+//! use nevr::engine::denoiser::VoxelDenoiser;
 //! use nevr::engine::voxel::{VoxelMaterial, RelativeVoxel, VoxelType, VoxelBlock};
 //!
 //! fn main() {
@@ -17,8 +17,8 @@
 //! }
 //!
 //! fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-//!     // create a new lambertian material with the color WHITE
-//!     let material = asset_server.add(VoxelMaterial::new_lambertian(VoxelColor::RGBA(1.0, 1.0, 1.0, 1.0)));
+//!     // create a new white lambertian material
+//! let material = asset_server.add(VoxelMaterial::new_lambertian(Color::WHITE));
 //!     // create a list of voxels that composes a block
 //!     let voxels = vec![RelativeVoxel::new(material, Vec3::ZERO)];
 //!     // create a type of block which is composed of 1x1x1 voxels
@@ -31,6 +31,9 @@
 //!     // use Transform to control the position and rotation and Projection to control the projection (perspective vs orthogonal, aspect ratio, etc...)
 //!     // VoxelCamera has additional parameters that you can check in the documentation
 //!     commands.spawn(VoxelCamera::default());
+//!
+//!     // use the simple denoiser as the denoiser pipeline
+//!     commands.insert_resource(VoxelDenoiser::Simple);
 //! }
 //! ```
 
@@ -94,6 +97,7 @@ impl NEVRPlugin {
     }
 }
 
+// TODO: add optional visibility prepass based on the denoiser
 // TODO: add better checking in the code to avoid bevy/wgpu panics to better inform users of errors in their code
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
@@ -285,7 +289,7 @@ fn prepare_view_target(
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba16Float,
-            usage: TextureUsages::STORAGE_BINDING,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
             view_formats: &[],
         };
 
@@ -295,6 +299,7 @@ fn prepare_view_target(
     }
 }
 
+// TODO: prepare only the changed blocks instead of preparing every block
 /// Prepare bindings for rendering.
 pub fn prepare_bindings(
     mut voxel_bindings: ResMut<VoxelBindings>,

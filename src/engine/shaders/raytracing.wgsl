@@ -36,9 +36,7 @@ struct HitDesc {
     color: vec3<f32>,
     scatter_direction: vec3<f32>,
     scatter: bool,
-    dist_sign: i32,
     albedo: vec3<f32>,
-    normal: vec3<f32>,
 }
 
 const RAY_T_MIN = 0.01f;
@@ -86,7 +84,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         var accumulated_light = vec3(0.0);
         var throughput = vec3(1.0);
-        var coh_dist = 0.0;
 
         loop {
             if (b == camera.bounces) {
@@ -95,60 +92,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_CULL_BACK_FACING);
 
-            var hit_desc = HitDesc(vec3(1.0), vec3(0.0), false, 1, vec3(0.0), vec3(0.0));
+            var scatter = vec4(0.0);
             if hit.kind != RAY_QUERY_INTERSECTION_NONE {
-                hit_desc = closest_hit(hit, &ray_seed, origin, direction);
-                accumulated_light += hit_desc.color * throughput;
-                var direct_light_visibility: f32 = 1.0;
-
-                if (hit_desc.dist_sign < 0) {
-                    let hit_point = origin + hit.t * direction;
-                    let light_coefficient = max(dot(-light.direction.xyz, hit_desc.normal), light.ambient.r);
-
-                    if (light_coefficient > 0.0) {
-                        let shadow_origin = hit_point + hit_desc.normal * 0.001;
-                        let shadow_direction = -light.direction.xyz;
-                        let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
-                        let shadow_hit = trace_ray(shadow_origin, shadow_direction, 0.001, 10000.0, flags);
-
-                        if (shadow_hit.kind == RAY_QUERY_INTERSECTION_NONE) {
-                            let direct_light = hit_desc.albedo * light_coefficient;
-                            accumulated_light += direct_light * throughput;
-                        } else {
-                            direct_light_visibility = light.ambient.r;
-                        }
-                    }
-                }
-
-                throughput *= hit_desc.albedo;
-
-                if (coh_dist >= 0.0) {
-                    coh_dist += hit.t;
-                    let material_hash = length(hit_desc.albedo * vec3(313.0, 513.0, 713.0));
-                    coh_dist += 1.0 * direct_light_visibility * material_hash;
-                }
-
-                coh_dist = f32(hit_desc.dist_sign) * abs(coh_dist);
+                scatter = closest_hit(hit, &ray_seed, origin, direction, &accumulated_light, &throughput);
             } else {
-                hit_desc = miss(hit, direction);
-                accumulated_light += hit_desc.color * throughput;
+                miss(hit, origin, direction, &accumulated_light, &throughput);
             }
 
-            if (hit_desc.scatter) {
+            if (scatter.w > 0.0) {
                 origin = origin + hit.t * direction;
-                direction = hit_desc.scatter_direction;
+                direction = scatter.xyz;
             } else {
                 break;
             }
 
-            if (max(throughput.r, max(throughput.g, throughput.b)) < 0.01) {
+            let random = random_float(&ray_seed);
+            if (random >= max(throughput.r, max(throughput.g, throughput.b))) {
                 break;
             }
 
             b += 1;
         }
 
-        pixel_color += vec4(accumulated_light, abs(coh_dist));
+        pixel_color += vec4(accumulated_light, 1.0);
     }
 
     pixel_color = pixel_color / f32(camera.samples);
@@ -164,7 +130,10 @@ fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ra
     return rayQueryGetCommittedIntersection(&rq);
 }
 
-fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>, direction: vec3<f32>) -> HitDesc {
+fn closest_hit(
+    hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>, direction: vec3<f32>,
+    accumulated_light: ptr<function, vec3<f32>>, throughput: ptr<function, vec3<f32>>
+) -> vec4<f32> {
     let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
 
     let object = objects[hit.instance_custom_data];
@@ -178,15 +147,42 @@ fn closest_hit(hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>
     let world_normal = normalize(mat3x3(hit.object_to_world[0].xyz, hit.object_to_world[1].xyz, hit.object_to_world[2].xyz) * normal);
 
     var hit_desc = scatter_fn(material, hit.t, seed, world_normal, direction);
-    hit_desc.normal = world_normal;
 
-    return hit_desc;
+    *accumulated_light += hit_desc.color * *throughput;
+
+    if (material.material_model == MATERIAL_MODEL_LAMBERTIAN) {
+        let hit_point = origin + hit.t * direction;
+        let light_coefficient = max(light.ambient.y * dot(-light.direction.xyz, world_normal), light.ambient.x);
+
+        if (light_coefficient > 0.0) {
+            let shadow_origin = hit_point + world_normal * 0.001;
+            let shadow_direction = -light.direction.xyz;
+            let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE | RAY_FLAG_CULL_BACK_FACING;
+            let shadow_hit = trace_ray(shadow_origin, shadow_direction, 0.001, 10000.0, flags);
+
+            if (shadow_hit.kind == RAY_QUERY_INTERSECTION_NONE) {
+                let direct_light = hit_desc.albedo * light_coefficient;
+                *accumulated_light += direct_light * *throughput;
+            }
+        }
+    }
+
+    *throughput *= hit_desc.albedo;
+    var scatter = 0.0;
+    if (hit_desc.scatter) {
+        scatter = 1.0;
+    }
+
+    return vec4(hit_desc.scatter_direction, scatter);
 }
 
-fn miss(hit: RayIntersection, direction: vec3<f32>) -> HitDesc {
+fn miss(
+    hit: RayIntersection, origin: vec3<f32>, direction: vec3<f32>,
+    accumulated_light: ptr<function, vec3<f32>>, throughput: ptr<function, vec3<f32>>
+) {
     let color = light.sky_color.rgb;
 
-    return HitDesc(color, vec3(0.0), false, 1, vec3(0.0), vec3(0.0));
+    *accumulated_light += light.sky_color.rgb * *throughput;
 }
 
 fn init_random_seed(val0: u32, val1: u32) -> u32 {
@@ -252,7 +248,7 @@ fn scatter_lambertian(material: Material, t: f32, seed: ptr<function, u32>, norm
     let color = material.diffuse.rgb;
     let scatter_direction = normal + random_in_unit_sphere(seed);
 
-    return HitDesc(vec3(0.0), normalize(scatter_direction), scatter, -1, color, vec3(0.0));
+    return HitDesc(vec3(0.0), normalize(scatter_direction), scatter, color);
 }
 
 fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
@@ -261,7 +257,7 @@ fn scatter_metallic(material: Material, t: f32, seed: ptr<function, u32>, normal
     let color = material.diffuse.rgb;
     let scatter_direction = reflected + material.fuzziness * random_in_unit_sphere(seed);
 
-    return HitDesc(vec3(0.0), normalize(scatter_direction), scatter, 1, color, vec3(0.0));
+    return HitDesc(vec3(0.0), normalize(scatter_direction), scatter, color);
 }
 
 fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
@@ -296,13 +292,13 @@ fn scatter_dielectric(material: Material, t: f32, seed: ptr<function, u32>, norm
         scatter_direction = reflect(direction, normal);
     }
 
-    return HitDesc(vec3(0.0), normalize(scatter_direction), scatter, 1, color, vec3(0.0));
+    return HitDesc(vec3(0.0), normalize(scatter_direction), scatter, color);
 }
 
 fn scatter_diffuse_light(material: Material, t: f32, seed: ptr<function, u32>) -> HitDesc {
     let color = material.diffuse.rgb;
 
-    return HitDesc(color, vec3(0.0), false, 1, vec3(0.0), vec3(0.0));
+    return HitDesc(color, vec3(0.0), false, vec3(0.0));
 }
 
 fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3<f32>, direction: vec3<f32>) -> HitDesc {
@@ -324,7 +320,7 @@ fn scatter_fn(material: Material, t: f32, seed: ptr<function, u32>, normal: vec3
         }
 
         default: {
-            return HitDesc(vec3(1.0, 0.0, 1.0), vec3(0.0), false, 1, vec3(0.0), vec3(0.0));
+            return HitDesc(vec3(1.0, 0.0, 1.0), vec3(0.0), false, vec3(0.0));
         }
     }
 }

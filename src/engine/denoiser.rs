@@ -6,7 +6,7 @@ use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::ecs::query::QueryItem;
-use bevy::prelude::{FromWorld, Plugin, Resource, UVec2, World};
+use bevy::prelude::{Component, FromWorld, Plugin, Resource, UVec2, World};
 use bevy::render::RenderApp;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
@@ -23,28 +23,25 @@ use bevy::render::view::{ViewTarget, ViewUniformOffset, ViewUniforms};
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 pub struct DenoiserLabel;
 
+// TODO: refactor the various denoisers as a trait and implement the denoise pipeline using a resource that holds that dynamic object
 /// Describes the denoiser to use for the rendering pipeline. It is recommended to try the various denoiser for
 /// your particular scene.
 ///
 /// Quick summary:
 /// - None: No denoiser.
 /// - Simple: The simplest and fastest denoiser, decent quality.
-/// - NLM: Fast, and decent quality.
 ///
 /// Defaults to [VoxelDenoiser::None].
 ///
-/// **Note:** By changing the samples count in [crate::engine::camera::VoxelCamera] the resulted denoise
+/// **Note:** By changing the samples count in [crate::engine::camera::VoxelCamera] the resulted denoised
 /// image may vary by a lot.
 #[derive(Resource, ExtractResource, Clone, Copy, Debug, Default)]
 pub enum VoxelDenoiser {
-    /// Doesn't enable the denoiser pass
+    /// Doesn't enable the denoiser pass.
     #[default]
     None,
     /// The simplest denoiser, it's really fast but has the worst quality.
     Simple,
-    /// A bit more sophisticated denoiser than the simple one, still fast enough and may have better
-    /// quality compared to that, but it still presents some noise and graphical glitches
-    NLM,
 }
 
 /// The plugin which adds a denoiser for the rendered image.
@@ -54,9 +51,7 @@ pub struct DenoiserPlugin;
 
 impl Plugin for DenoiserPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/no_denoiser.wgsl");
         embedded_asset!(app, "shaders/simple_denoiser.wgsl");
-        embedded_asset!(app, "shaders/nlm_denoiser.wgsl");
 
         app.add_plugins(ExtractResourcePlugin::<VoxelDenoiser>::default())
             .init_resource::<VoxelDenoiser>();
@@ -75,48 +70,27 @@ impl Plugin for DenoiserPlugin {
 }
 
 pub struct DenoiserNode {
-    none_pipeline: CachedComputePipelineId,
     simple_pipeline: CachedComputePipelineId,
-    nlm_vertical_pipeline: CachedComputePipelineId,
-    nlm_horizontal_pipeline: CachedComputePipelineId,
 }
 
 impl DenoiserNode {
     fn none_pipeline(
         &self,
         render_context: &mut RenderContext,
-        pipeline_cache: &PipelineCache,
-        bind_group_layout: &BindGroupLayout,
+        _pipeline_cache: &PipelineCache,
+        _bind_group_layout: &BindGroupLayout,
         view_output: &TextureView,
         view_input: &TextureView,
-        view_uniforms: BindingResource,
-        view_uniform_offset: u32,
-        viewport: &UVec2,
+        _view_uniforms: BindingResource,
+        _view_uniform_offset: u32,
+        _viewport: &UVec2,
     ) {
-        let Some(pipeline) = pipeline_cache.get_compute_pipeline(self.none_pipeline) else {
-            eprintln!(
-                "{:?}",
-                pipeline_cache.get_compute_pipeline_state(self.none_pipeline)
-            );
-            return;
-        };
-
-        let denoise_bind_group = render_context.render_device().create_bind_group(
-            "voxel_bindings_denoiser",
-            bind_group_layout,
-            &BindGroupEntries::sequential((view_output, view_input, view_uniforms)),
-        );
-
         let command_encoder = render_context.command_encoder();
-
-        let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("voxel_raytracing_no_denoiser"),
-            timestamp_writes: None,
-        });
-
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &denoise_bind_group, &[view_uniform_offset]);
-        pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
+        command_encoder.copy_texture_to_texture(
+            view_input.texture().as_image_copy(),
+            view_output.texture().as_image_copy(),
+            view_output.texture().size(),
+        );
     }
 
     fn simple_pipeline(
@@ -155,58 +129,6 @@ impl DenoiserNode {
         pass.set_bind_group(0, &denoise_bind_group, &[view_uniform_offset]);
         pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
     }
-
-    fn nlm_pipeline(
-        &self,
-        render_context: &mut RenderContext,
-        pipeline_cache: &PipelineCache,
-        bind_group_layout: &BindGroupLayout,
-        view_output: &TextureView,
-        view_input: &TextureView,
-        view_uniforms: BindingResource,
-        view_uniform_offset: u32,
-        viewport: &UVec2,
-    ) {
-        let Some(vertical_pipeline) =
-            pipeline_cache.get_compute_pipeline(self.nlm_vertical_pipeline)
-        else {
-            eprintln!(
-                "{:?}",
-                pipeline_cache.get_compute_pipeline_state(self.nlm_vertical_pipeline)
-            );
-            return;
-        };
-
-        let Some(horizontal_pipeline) =
-            pipeline_cache.get_compute_pipeline(self.nlm_horizontal_pipeline)
-        else {
-            eprintln!(
-                "{:?}",
-                pipeline_cache.get_compute_pipeline_state(self.nlm_horizontal_pipeline)
-            );
-            return;
-        };
-
-        let denoise_bind_group = render_context.render_device().create_bind_group(
-            "voxel_bindings_denoiser",
-            bind_group_layout,
-            &BindGroupEntries::sequential((view_output, view_input, view_uniforms)),
-        );
-
-        let command_encoder = render_context.command_encoder();
-
-        let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("voxel_raytracing_nlm_denoiser"),
-            timestamp_writes: None,
-        });
-
-        pass.set_pipeline(vertical_pipeline);
-        pass.set_bind_group(0, &denoise_bind_group, &[view_uniform_offset]);
-        pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
-
-        pass.set_pipeline(horizontal_pipeline);
-        pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
-    }
 }
 
 impl FromWorld for DenoiserNode {
@@ -215,13 +137,6 @@ impl FromWorld for DenoiserNode {
         let voxel_bindings = world.resource::<VoxelBindings>();
         let binding_layout = voxel_bindings.bind_group_layouts[2].clone();
 
-        let none_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("voxel_none_denoiser_pipeline".into()),
-            layout: vec![binding_layout.clone()],
-            shader: load_embedded_asset!(world, "shaders/no_denoiser.wgsl"),
-            ..Default::default()
-        });
-
         let simple_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("voxel_simple_denoiser_pipeline".into()),
             layout: vec![binding_layout.clone()],
@@ -229,30 +144,7 @@ impl FromWorld for DenoiserNode {
             ..Default::default()
         });
 
-        let nlm_vertical_pipeline =
-            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-                label: Some("voxel_nlm_vertical_denoiser_pipeline".into()),
-                layout: vec![binding_layout.clone()],
-                shader: load_embedded_asset!(world, "shaders/nlm_denoiser.wgsl"),
-                entry_point: Some("vertical".into()),
-                ..Default::default()
-            });
-
-        let nlm_horizontal_pipeline =
-            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-                label: Some("voxel_nlm_horizontal_denoiser_pipeline".into()),
-                layout: vec![binding_layout.clone()],
-                shader: load_embedded_asset!(world, "shaders/nlm_denoiser.wgsl"),
-                entry_point: Some("horizontal".into()),
-                ..Default::default()
-            });
-
-        Self {
-            none_pipeline,
-            simple_pipeline,
-            nlm_vertical_pipeline,
-            nlm_horizontal_pipeline,
-        }
+        Self { simple_pipeline }
     }
 }
 
@@ -302,16 +194,6 @@ impl ViewNode for DenoiserNode {
                 viewport,
             ),
             VoxelDenoiser::Simple => self.simple_pipeline(
-                render_context,
-                pipeline_cache,
-                &voxel_bindings.bind_group_layouts[2],
-                &TextureView::from(view_target.get_unsampled_color_attachment().view.clone()),
-                &voxel_view_target.0.default_view,
-                view_uniforms,
-                view_uniform_offset.offset,
-                viewport,
-            ),
-            VoxelDenoiser::NLM => self.nlm_pipeline(
                 render_context,
                 pipeline_cache,
                 &voxel_bindings.bind_group_layouts[2],

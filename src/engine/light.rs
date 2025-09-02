@@ -11,23 +11,55 @@ use bevy::render::render_resource::encase::internal::{
 };
 use bevy::render::render_resource::encase::private::{Metadata, SizeValue};
 
-/// Used for ambient light, directional light and the sky color.
-///
-/// Check the fields for more information.
+/// Used for ambient light, directional light and its intensity, and the sky color.
 #[derive(Resource, Clone)]
 pub struct VoxelLight {
-    /// Ambient light, i.e. the minimum light in the scene. Defaults to 0.03
-    pub ambient: Vec4,
+    /// Ambient light and light intensity, i.e. the minimum light in the scene. Defaults to (0.03, 1.0)
+    pub(crate) ambient: Vec4,
     /// The direction for directional light. Defaults to NEG_Y, i.e. from top to bottom as the Sun in the middle of the day.
-    pub direction: Vec4,
+    pub(crate) direction: Vec4,
     /// The color of the sky, it's used in reflections, global illuminations, etc...
-    pub sky_color: Vec4,
+    pub(crate) sky_color: Vec4,
+}
+
+impl VoxelLight {
+    pub fn ambient(&self) -> f32 {
+        self.ambient.x
+    }
+
+    pub fn intensity(&self) -> f32 {
+        self.ambient.y
+    }
+
+    pub fn direction(&self) -> Vec4 {
+        self.direction
+    }
+
+    pub fn sky_color(&self) -> Vec4 {
+        self.sky_color
+    }
+
+    pub fn set_ambient(&mut self, ambient_light: f32) {
+        self.ambient.x = ambient_light;
+    }
+
+    pub fn set_intensity(&mut self, light_intensity: f32) {
+        self.ambient.y = light_intensity;
+    }
+
+    pub fn set_direction(&mut self, direction: Vec4) {
+        self.direction = direction;
+    }
+
+    pub fn set_sky_color(&mut self, sky_color: Vec4) {
+        self.sky_color = sky_color;
+    }
 }
 
 impl Default for VoxelLight {
     fn default() -> Self {
         Self {
-            ambient: Vec4::new(0.03, 0.03, 0.03, 1.0),
+            ambient: Vec4::new(0.03, 1.0, 0.03, 1.0),
             direction: Vec4::NEG_Y,
             sky_color: Vec4::new(0.5, 0.7, 1.0, 1.0),
         }
