@@ -57,11 +57,17 @@ const RAY_NO_CULL = 0xFFu;
 @group(1) @binding(2) var<uniform> light: Light;
 @group(1) @binding(3) var<uniform> view: View;
 
+@group(2) @binding(0) var albedo_texture: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(1) var normal_texture: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(2) var world_position_texture: texture_storage_2d<rgba16float, write>;
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if any(global_id.xy >= vec2u(view.viewport.zw)) {
         return;
     }
+
+    create_g_buffer(global_id);
 
     var pixel_color = vec4(0.0);
     var ray_seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces * view.frame_count);
@@ -76,6 +82,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let in_uv = pixel_center / vec2(view.viewport.zw);
         let d = in_uv * 2.0 - 1.0;
 
+        // TODO: fix aperture offset not applied
         let offset = camera.aperture / 2.0 * random_in_unit_disk(&ray_seed);
         var origin = view.world_position;
         let camera_target = view.world_from_clip * vec4(d.x, -d.y, 1.0, 1.0);
@@ -120,6 +127,43 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     pixel_color = pixel_color / f32(camera.samples);
 
     textureStore(view_output, global_id.xy, pixel_color);
+}
+
+fn create_g_buffer(global_id: vec3<u32>) {
+    let pixel_center = vec2<f32>(global_id.xy) + vec2(0.5);
+    let in_uv = pixel_center / vec2(view.viewport.zw);
+    let d = in_uv * 2.0 - 1.0;
+
+    var origin = view.world_position;
+    let camera_target = view.world_from_clip * vec4(d.x, -d.y, 1.0, 1.0);
+    var direction = normalize((camera_target.xyz / camera_target.w) - origin);
+
+    let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_CULL_BACK_FACING);
+
+    var albedo: vec3<f32>;
+    var normal: vec3<f32>;
+    var world_position: vec3<f32>;
+
+    if hit.kind != RAY_QUERY_INTERSECTION_NONE {
+        let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
+
+        let object = objects[hit.instance_custom_data];
+        let material = materials[material_map[object.material_id + hit.primitive_index]];
+        let index = indices[object.index + hit.primitive_index];
+        let n0 = normals[index.x].xyz;
+        let n1 = normals[index.y].xyz;
+        let n2 = normals[index.z].xyz;
+
+        let nrm = mat3x3(n0, n1, n2) * barycentrics;
+
+        albedo = material.diffuse.rgb;
+        world_position = origin.xyz + hit.t * direction.xyz;
+        normal = normalize(mat3x3(hit.object_to_world[0].xyz, hit.object_to_world[1].xyz, hit.object_to_world[2].xyz) * nrm);
+    }
+
+    textureStore(albedo_texture, global_id.xy, vec4(albedo, 1.0));
+    textureStore(normal_texture, global_id.xy, vec4(normal, 1.0));
+    textureStore(world_position_texture, global_id.xy, vec4(world_position, 1.0));
 }
 
 fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32) -> RayIntersection {

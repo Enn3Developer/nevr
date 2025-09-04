@@ -41,7 +41,7 @@ pub mod engine;
 
 use crate::engine::blas::{BlasManager, compact_blas, prepare_blas};
 use crate::engine::camera::{RayCamera, VoxelCamera};
-use crate::engine::denoiser::DenoiserPlugin;
+use crate::engine::denoiser::{DenoiserPlugin, VoxelDenoiser};
 use crate::engine::geometry::{GeometryManager, RenderObject, prepare_geometry, prepare_materials};
 use crate::engine::light::{RenderVoxelLight, VoxelLight};
 use crate::engine::node::NEVRNodeRender;
@@ -243,22 +243,25 @@ impl FromWorld for VoxelBindings {
                     ),
                 ),
                 render_device.create_bind_group_layout(
-                    "voxel_denoiser_bind_group_layout",
+                    "voxel_g_buffer_bind_group_layout",
                     &BindGroupLayoutEntries::sequential(
                         ShaderStages::COMPUTE,
                         (
-                            // View output
+                            // Albedo
                             texture_storage_2d(
                                 TextureFormat::Rgba16Float,
                                 StorageTextureAccess::WriteOnly,
                             ),
-                            // View input
+                            // Normal
                             texture_storage_2d(
                                 TextureFormat::Rgba16Float,
-                                StorageTextureAccess::ReadWrite,
+                                StorageTextureAccess::WriteOnly,
                             ),
-                            // View
-                            uniform_buffer::<ViewUniform>(true),
+                            // World position
+                            texture_storage_2d(
+                                TextureFormat::Rgba16Float,
+                                StorageTextureAccess::WriteOnly,
+                            ),
                         ),
                     ),
                 ),
@@ -271,10 +274,20 @@ impl FromWorld for VoxelBindings {
 #[derive(Component)]
 pub struct VoxelViewTarget(pub CachedTexture);
 
+/// Texture views for g-buffer's data (used for denoising)
+#[derive(Component)]
+pub struct VoxelGBuffer {
+    pub albedo: CachedTexture,
+    pub normal: CachedTexture,
+    pub world_position: CachedTexture,
+    pub secondary_textures: Vec<CachedTexture>,
+}
+
 fn prepare_view_target(
     query: Query<(Entity, &ExtractedCamera), With<RayCamera>>,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
+    voxel_denoiser: Res<VoxelDenoiser>,
     mut commands: Commands,
 ) {
     for (entity, camera) in query {
@@ -282,7 +295,7 @@ fn prepare_view_target(
             continue;
         };
 
-        let descriptor = TextureDescriptor {
+        let target_descriptor = TextureDescriptor {
             label: Some("voxel_raytracing_view_target"),
             size: viewport.to_extents(),
             mip_level_count: 1,
@@ -293,9 +306,75 @@ fn prepare_view_target(
             view_formats: &[],
         };
 
-        commands.entity(entity).insert(VoxelViewTarget(
-            texture_cache.get(&render_device, descriptor),
-        ));
+        let albedo_descriptor = TextureDescriptor {
+            label: Some("voxel_raytracing_albedo"),
+            size: viewport.to_extents(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        };
+
+        let normal_descriptor = TextureDescriptor {
+            label: Some("voxel_raytracing_normal"),
+            size: viewport.to_extents(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        };
+
+        let world_position_descriptor = TextureDescriptor {
+            label: Some("voxel_raytracing_world_position"),
+            size: viewport.to_extents(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        };
+
+        let secondary_texture_descriptor = TextureDescriptor {
+            label: Some("voxel_raytracing_a_trous_secondary_texture"),
+            size: viewport.to_extents(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+
+        let secondary_textures = if let VoxelDenoiser::ATrous(size) = *voxel_denoiser {
+            let size = (size.get() as f32).log2().floor() as usize + 1;
+            let mut textures = Vec::with_capacity(size);
+
+            for _ in 0..size {
+                textures
+                    .push(texture_cache.get(&render_device, secondary_texture_descriptor.clone()));
+            }
+
+            textures
+        } else {
+            vec![]
+        };
+
+        commands
+            .entity(entity)
+            .insert(VoxelViewTarget(
+                texture_cache.get(&render_device, target_descriptor),
+            ))
+            .insert(VoxelGBuffer {
+                albedo: texture_cache.get(&render_device, albedo_descriptor),
+                normal: texture_cache.get(&render_device, normal_descriptor),
+                world_position: texture_cache.get(&render_device, world_position_descriptor),
+                secondary_textures,
+            });
     }
 }
 

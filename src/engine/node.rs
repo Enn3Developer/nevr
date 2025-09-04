@@ -2,7 +2,7 @@
 
 use crate::engine::camera::RayCamera;
 use crate::engine::light::RenderVoxelLight;
-use crate::{VoxelBindings, VoxelViewTarget};
+use crate::{VoxelBindings, VoxelGBuffer, VoxelViewTarget};
 use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
@@ -53,7 +53,7 @@ impl FromWorld for NEVRNode {
 
         let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("voxel_raytracing_pipeline".into()),
-            layout: voxel_bindings.bind_group_layouts[..2].to_vec(),
+            layout: voxel_bindings.bind_group_layouts[..].to_vec(),
             shader: load_embedded_asset!(world, "shaders/raytracing.wgsl"),
             ..Default::default()
         });
@@ -68,13 +68,14 @@ impl ViewNode for NEVRNode {
         &'static RayCamera,
         &'static ViewUniformOffset,
         &'static VoxelViewTarget,
+        &'static VoxelGBuffer,
     );
 
     fn run<'w>(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (extracted_camera, camera, view_uniform_offset, voxel_view_target): QueryItem<
+        (extracted_camera, camera, view_uniform_offset, voxel_view_target, g_buffer): QueryItem<
             'w,
             '_,
             Self::ViewQuery,
@@ -125,6 +126,16 @@ impl ViewNode for NEVRNode {
             )),
         );
 
+        let g_buffer_bind_group = render_context.render_device().create_bind_group(
+            "voxel_bindings_g_buffer",
+            &voxel_bindings.bind_group_layouts[2],
+            &BindGroupEntries::sequential((
+                &g_buffer.albedo.default_view,
+                &g_buffer.normal.default_view,
+                &g_buffer.world_position.default_view,
+            )),
+        );
+
         let command_encoder = render_context.command_encoder();
 
         let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -135,6 +146,7 @@ impl ViewNode for NEVRNode {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.set_bind_group(1, &camera_bind_group, &[view_uniform_offset.offset]);
+        pass.set_bind_group(2, &g_buffer_bind_group, &[]);
         pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
 
         Ok(())
