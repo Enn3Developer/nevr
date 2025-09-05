@@ -71,13 +71,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var pixel_color = vec4(0.0);
     var ray_seed = init_random_seed(init_random_seed(global_id.x, global_id.y), camera.samples * camera.bounces * view.frame_count);
-    var pixel_seed = init_random_seed(camera.samples * camera.bounces, camera.samples);
+    var pixel_seed = init_random_seed(camera.samples * camera.bounces, camera.samples * view.frame_count);
 
     for (var i = u32(0); i < camera.samples; i++) {
-        var jitter = vec2(0.5);
-        if (i > 0) {
-            jitter = vec2(random_float(&pixel_seed), random_float(&pixel_seed));
-        }
+        let jitter = vec2(random_float(&pixel_seed), random_float(&pixel_seed));
         let pixel_center = vec2<f32>(global_id.xy) + jitter;
         let in_uv = pixel_center / vec2(view.viewport.zw);
         let d = in_uv * 2.0 - 1.0;
