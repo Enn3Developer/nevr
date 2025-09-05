@@ -1,12 +1,11 @@
 //! Denoiser module.
 
 use crate::engine::node::NEVRNodeLabel;
-use crate::{VoxelBindings, VoxelGBuffer, VoxelViewTarget};
+use crate::{VoxelGBuffer, VoxelViewTarget};
 use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::ecs::query::QueryItem;
-use bevy::image::ToExtents;
 use bevy::prelude::{FromWorld, Plugin, Resource, UVec2, World};
 use bevy::render::RenderApp;
 use bevy::render::camera::ExtractedCamera;
@@ -17,12 +16,10 @@ use bevy::render::render_graph::{
 use bevy::render::render_resource::binding_types::{texture_storage_2d, uniform_buffer};
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, BindingResource,
-    CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, IntoBinding,
-    PipelineCache, ShaderStages, StorageTextureAccess, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, TextureView, UniformBuffer,
+    CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, PipelineCache,
+    ShaderStages, StorageTextureAccess, TextureFormat, TextureView, UniformBuffer,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
-use bevy::render::texture::TextureCache;
 use bevy::render::view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms};
 use std::num::NonZeroU32;
 
