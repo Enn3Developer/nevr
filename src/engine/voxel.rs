@@ -6,8 +6,8 @@ use bevy::ecs::query::QueryItem;
 use bevy::ecs::system::SystemParamItem;
 use bevy::ecs::system::lifetimeless::SRes;
 use bevy::prelude::{
-    Asset, Color, ColorToComponents, Component, GlobalTransform, Handle, LinearRgba, Srgba,
-    Transform, TypePath, Vec3, Visibility,
+    Asset, Color, ColorToComponents, Component, GlobalTransform, Handle, InheritedVisibility,
+    LinearRgba, Srgba, Transform, TypePath, Vec3, Visibility,
 };
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
@@ -226,18 +226,23 @@ pub struct RenderVoxelBlock {
 }
 
 impl ExtractComponent for VoxelBlock {
-    type QueryData = (&'static VoxelBlock, &'static GlobalTransform);
+    type QueryData = (
+        &'static VoxelBlock,
+        &'static GlobalTransform,
+        &'static InheritedVisibility,
+    );
     type QueryFilter = ();
-    type Out = (RenderVoxelBlock, GlobalTransform);
+    type Out = (RenderVoxelBlock, GlobalTransform, InheritedVisibility);
 
     fn extract_component(
-        (block, transform): QueryItem<'_, '_, Self::QueryData>,
+        (block, transform, visibility): QueryItem<'_, '_, Self::QueryData>,
     ) -> Option<Self::Out> {
         Some((
             RenderVoxelBlock {
                 voxel_type: block.voxel_type.id(),
             },
             *transform,
+            *visibility,
         ))
     }
 }

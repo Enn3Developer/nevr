@@ -51,8 +51,8 @@ use crate::engine::voxel::{
 use bevy::app::App;
 use bevy::image::ToExtents;
 use bevy::prelude::{
-    AssetApp, Commands, Component, Entity, FromWorld, GlobalTransform, IntoScheduleConfigs, Mat4,
-    Plugin, Query, Res, ResMut, Resource, UVec4, Vec4, With, World,
+    AssetApp, Commands, Component, Entity, FromWorld, GlobalTransform, InheritedVisibility,
+    IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut, Resource, UVec4, Vec4, With, World,
 };
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
@@ -385,7 +385,7 @@ pub fn prepare_bindings(
     render_queue: Res<RenderQueue>,
     blas_manager: Res<BlasManager>,
     geometry_manager: Res<GeometryManager>,
-    blocks_query: Query<(&RenderVoxelBlock, &GlobalTransform)>,
+    blocks_query: Query<(&RenderVoxelBlock, &GlobalTransform, &InheritedVisibility)>,
 ) {
     voxel_bindings.bind_group = None;
 
@@ -405,7 +405,10 @@ pub fn prepare_bindings(
     let mut objects = StorageBuffer::<Vec<RenderObject>>::default();
 
     let mut instance_id = 0;
-    for (block, transform) in blocks_query {
+    for (block, transform, visible) in blocks_query {
+        if *visible == InheritedVisibility::HIDDEN {
+            continue;
+        }
         let voxel_type = block.voxel_type.clone();
         let Some(blas) = blas_manager.get(&block.voxel_type) else {
             continue;
