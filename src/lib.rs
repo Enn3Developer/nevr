@@ -97,7 +97,6 @@ impl NEVRPlugin {
     }
 }
 
-// TODO: add optional visibility prepass based on the denoiser
 // TODO: add better checking in the code to avoid bevy/wgpu panics to better inform users of errors in their code
 impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
