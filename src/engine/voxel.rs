@@ -6,8 +6,8 @@ use bevy::ecs::query::QueryItem;
 use bevy::ecs::system::SystemParamItem;
 use bevy::ecs::system::lifetimeless::SRes;
 use bevy::prelude::{
-    Asset, Color, ColorToComponents, Component, GlobalTransform, Handle, Srgba, Transform,
-    TypePath, Vec3, Visibility,
+    Asset, Color, ColorToComponents, Component, GlobalTransform, Handle, LinearRgba, Srgba,
+    Transform, TypePath, Vec3, Visibility,
 };
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
@@ -60,7 +60,7 @@ impl From<VoxelMaterialModel> for u32 {
 #[derive(Asset, TypePath, Clone, Copy)]
 #[repr(C)]
 pub struct VoxelMaterial {
-    diffuse: Srgba,
+    diffuse: LinearRgba,
     _diffuse_texture_id: i32,
     fuzziness: f32,
     refraction_index: f32,
@@ -69,7 +69,7 @@ pub struct VoxelMaterial {
 
 impl VoxelMaterial {
     pub fn new(
-        diffuse: Srgba,
+        diffuse: LinearRgba,
         fuzziness: f32,
         refraction_index: f32,
         material_model: VoxelMaterialModel,
@@ -87,7 +87,12 @@ impl VoxelMaterial {
     ///
     /// Check [VoxelMaterialModel::Lambertian] for more information.
     pub fn new_lambertian(diffuse: Color) -> Self {
-        Self::new(diffuse.to_srgba(), 0.0, 0.0, VoxelMaterialModel::Lambertian)
+        Self::new(
+            diffuse.to_linear(),
+            0.0,
+            0.0,
+            VoxelMaterialModel::Lambertian,
+        )
     }
 
     /// Creates a new metallic material.
@@ -95,7 +100,7 @@ impl VoxelMaterial {
     /// Check [VoxelMaterialModel::Metallic] for more information.
     pub fn new_metallic(diffuse: Color, fuzziness: f32) -> Self {
         Self::new(
-            diffuse.to_srgba(),
+            diffuse.to_linear(),
             fuzziness,
             0.0,
             VoxelMaterialModel::Metallic,
@@ -107,7 +112,7 @@ impl VoxelMaterial {
     /// Check [VoxelMaterialModel::Dielectric] for more information.
     pub fn new_dielectric(diffuse: Color, refraction_index: f32) -> Self {
         Self::new(
-            diffuse.to_srgba(),
+            diffuse.to_linear(),
             0.0,
             refraction_index,
             VoxelMaterialModel::Dielectric,
@@ -118,7 +123,7 @@ impl VoxelMaterial {
     ///
     /// Check [VoxelMaterialModel::DiffuseLight] for more information.
     pub fn new_diffuse_light(diffuse: Color, brightness: f32) -> Self {
-        let mut diffuse = diffuse.to_srgba();
+        let mut diffuse = diffuse.to_linear();
         diffuse.red *= brightness;
         diffuse.green *= brightness;
         diffuse.blue *= brightness;
