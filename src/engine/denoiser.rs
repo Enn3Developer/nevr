@@ -42,7 +42,7 @@ pub struct DenoiserLabel;
 ///
 /// **Note:** By changing the samples count in [crate::engine::camera::VoxelCamera] the resulted denoised
 /// image may vary by a lot.
-#[derive(Resource, ExtractResource, Clone, Copy, Debug, Default)]
+#[derive(Resource, ExtractResource, Clone, Copy, Debug, Default, PartialEq)]
 pub enum VoxelDenoiser {
     /// Doesn't enable the denoiser pass.
     #[default]
