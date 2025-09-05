@@ -17,9 +17,9 @@ pub struct VoxelLight {
     /// Ambient light and light intensity, i.e. the minimum light in the scene. Defaults to (0.03, 1.0)
     pub(crate) ambient: Vec4,
     /// The direction for directional light. Defaults to NEG_Y, i.e. from top to bottom as the Sun in the middle of the day.
-    pub(crate) direction: Vec4,
+    pub direction: Vec4,
     /// The color of the sky, it's used in reflections, global illuminations, etc...
-    pub(crate) sky_color: Vec4,
+    pub sky_color: Vec4,
 }
 
 impl VoxelLight {

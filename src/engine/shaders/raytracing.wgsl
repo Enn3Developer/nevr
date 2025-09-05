@@ -226,7 +226,7 @@ fn miss(
 ) {
     let color = light.sky_color.rgb;
 
-    *accumulated_light += light.sky_color.rgb * *throughput;
+    *accumulated_light += color * *throughput;
 }
 
 fn init_random_seed(val0: u32, val1: u32) -> u32 {
