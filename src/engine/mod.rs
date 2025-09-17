@@ -9,4 +9,5 @@ pub mod denoiser;
 pub mod geometry;
 pub mod light;
 pub mod node;
+pub mod skybox;
 pub mod voxel;

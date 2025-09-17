@@ -2,6 +2,7 @@
 
 use crate::engine::camera::RayCamera;
 use crate::engine::light::RenderVoxelLight;
+use crate::engine::skybox::VoxelSkybox;
 use crate::{VoxelBindings, VoxelGBuffer, VoxelViewTarget};
 use bevy::app::App;
 use bevy::asset::{embedded_asset, load_embedded_asset};
@@ -10,6 +11,7 @@ use bevy::ecs::query::QueryItem;
 use bevy::prelude::{FromWorld, Plugin, World};
 use bevy::render::RenderApp;
 use bevy::render::camera::ExtractedCamera;
+use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_graph::{
     NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
 };
@@ -18,7 +20,9 @@ use bevy::render::render_resource::{
     DynamicUniformBuffer, PipelineCache,
 };
 use bevy::render::renderer::{RenderContext, RenderQueue};
+use bevy::render::texture::GpuImage;
 use bevy::render::view::{ViewUniformOffset, ViewUniforms};
+use bevy::shader::ShaderDefVal;
 
 pub struct NEVRNodeRender;
 
@@ -44,6 +48,7 @@ pub struct NEVRNodeLabel;
 
 pub struct NEVRNode {
     pipeline: CachedComputePipelineId,
+    skybox_pipeline: CachedComputePipelineId,
 }
 
 impl FromWorld for NEVRNode {
@@ -53,12 +58,23 @@ impl FromWorld for NEVRNode {
 
         let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("voxel_raytracing_pipeline".into()),
-            layout: voxel_bindings.bind_group_layouts[..].to_vec(),
+            layout: voxel_bindings.bind_group_layouts[..3].to_vec(),
             shader: load_embedded_asset!(world, "shaders/raytracing.wgsl"),
             ..Default::default()
         });
 
-        Self { pipeline }
+        let skybox_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some("voxel_raytracing_pipeline".into()),
+            layout: voxel_bindings.bind_group_layouts[..].to_vec(),
+            shader: load_embedded_asset!(world, "shaders/raytracing.wgsl"),
+            shader_defs: vec![ShaderDefVal::Bool("SKYBOX".into(), true)],
+            ..Default::default()
+        });
+
+        Self {
+            pipeline,
+            skybox_pipeline,
+        }
     }
 }
 
@@ -87,11 +103,18 @@ impl ViewNode for NEVRNode {
         let render_queue = world.resource::<RenderQueue>();
         let view_uniforms = world.resource::<ViewUniforms>();
         let voxel_light = world.resource::<RenderVoxelLight>();
+        let optional_skybox = world.get_resource::<VoxelSkybox>();
 
-        let Some(pipeline) = pipeline_cache.get_compute_pipeline(self.pipeline) else {
+        let pipeline_id = if optional_skybox.is_some() {
+            self.skybox_pipeline
+        } else {
+            self.pipeline
+        };
+
+        let Some(pipeline) = pipeline_cache.get_compute_pipeline(pipeline_id) else {
             eprintln!(
                 "{:?}",
-                pipeline_cache.get_compute_pipeline_state(self.pipeline)
+                pipeline_cache.get_compute_pipeline_state(pipeline_id)
             );
             return Ok(());
         };
@@ -136,6 +159,22 @@ impl ViewNode for NEVRNode {
             )),
         );
 
+        let optional_skybox_bind_group = if let Some(skybox) = optional_skybox {
+            let gpu_images = world.resource::<RenderAssets<GpuImage>>();
+            let Some(image) = gpu_images.get(skybox.0.id()) else {
+                eprintln!("no skybox image found");
+                return Ok(());
+            };
+
+            Some(render_context.render_device().create_bind_group(
+                "voxel_bindings_skybox",
+                &voxel_bindings.bind_group_layouts[3],
+                &BindGroupEntries::sequential((&image.texture_view, &image.sampler)),
+            ))
+        } else {
+            None
+        };
+
         let command_encoder = render_context.command_encoder();
 
         let mut pass = command_encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -147,6 +186,9 @@ impl ViewNode for NEVRNode {
         pass.set_bind_group(0, bind_group, &[]);
         pass.set_bind_group(1, &camera_bind_group, &[view_uniform_offset.offset]);
         pass.set_bind_group(2, &g_buffer_bind_group, &[]);
+        if let Some(skybox_bind_group) = optional_skybox_bind_group.as_ref() {
+            pass.set_bind_group(3, skybox_bind_group, &[]);
+        }
         pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
 
         Ok(())

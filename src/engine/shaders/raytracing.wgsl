@@ -8,6 +8,8 @@ struct Camera {
 }
 
 struct Light {
+    // r: ambient light
+    // g: light intensity
     ambient: vec4<f32>,
     direction: vec4<f32>,
     sky_color: vec4<f32>,
@@ -60,6 +62,11 @@ const RAY_NO_CULL = 0xFFu;
 @group(2) @binding(0) var albedo_texture: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(1) var normal_texture: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(2) var world_position_texture: texture_storage_2d<rgba16float, write>;
+
+#ifdef SKYBOX
+@group(3) @binding(0) var skybox: texture_cube<f32>;
+@group(3) @binding(1) var skybox_sampler: sampler;
+#endif
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -221,7 +228,12 @@ fn miss(
     hit: RayIntersection, origin: vec3<f32>, direction: vec3<f32>,
     accumulated_light: ptr<function, vec3<f32>>, throughput: ptr<function, vec3<f32>>
 ) {
+#ifndef SKYBOX
     let color = light.sky_color.rgb;
+#else
+    let color = textureSampleLevel(skybox, skybox_sampler, direction, 0.0).rgb;
+#endif
+
 
     *accumulated_light += color * *throughput;
 }

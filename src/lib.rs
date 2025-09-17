@@ -45,6 +45,7 @@ use crate::engine::denoiser::{DenoiserPlugin, VoxelDenoiser};
 use crate::engine::geometry::{GeometryManager, RenderObject, prepare_geometry, prepare_materials};
 use crate::engine::light::{RenderVoxelLight, VoxelLight};
 use crate::engine::node::NEVRNodeRender;
+use crate::engine::skybox::VoxelSkybox;
 use crate::engine::voxel::{
     RenderVoxelBlock, RenderVoxelType, VoxelBlock, VoxelMaterial, VoxelType,
 };
@@ -59,13 +60,14 @@ use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::extract_resource::ExtractResourcePlugin;
 use bevy::render::render_asset::{RenderAssetPlugin, prepare_assets};
 use bevy::render::render_resource::binding_types::{
-    acceleration_structure, storage_buffer_read_only, texture_storage_2d, uniform_buffer,
+    acceleration_structure, sampler, storage_buffer_read_only, texture_cube, texture_storage_2d,
+    uniform_buffer,
 };
 use bevy::render::render_resource::{
     AccelerationStructureFlags, AccelerationStructureUpdateMode, BindGroup, BindGroupEntries,
     BindGroupLayout, BindGroupLayoutEntries, CommandEncoderDescriptor, CreateTlasDescriptor,
-    ShaderStages, StorageBuffer, StorageTextureAccess, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, TlasInstance,
+    SamplerBindingType, ShaderStages, StorageBuffer, StorageTextureAccess, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TlasInstance,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::settings::WgpuFeatures;
@@ -102,6 +104,7 @@ impl Plugin for NEVRPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((NEVRNodeRender, DenoiserPlugin))
             .add_plugins(ExtractResourcePlugin::<RenderVoxelLight>::default())
+            .add_plugins(ExtractResourcePlugin::<VoxelSkybox>::default())
             .add_plugins(RenderAssetPlugin::<VoxelMaterial>::default())
             .add_plugins(RenderAssetPlugin::<RenderVoxelType>::default())
             .add_plugins(ExtractComponentPlugin::<VoxelBlock>::default())
@@ -190,7 +193,7 @@ impl ToBytes for [u32] {
 #[derive(Resource)]
 pub struct VoxelBindings {
     pub bind_group: Option<BindGroup>,
-    pub bind_group_layouts: [BindGroupLayout; 3],
+    pub bind_group_layouts: [BindGroupLayout; 4],
 }
 
 impl FromWorld for VoxelBindings {
@@ -261,6 +264,18 @@ impl FromWorld for VoxelBindings {
                                 TextureFormat::Rgba16Float,
                                 StorageTextureAccess::WriteOnly,
                             ),
+                        ),
+                    ),
+                ),
+                render_device.create_bind_group_layout(
+                    "voxel_skybox_bind_group_layout",
+                    &BindGroupLayoutEntries::sequential(
+                        ShaderStages::COMPUTE,
+                        (
+                            // Skybox texture
+                            texture_cube(TextureSampleType::Float { filterable: true }),
+                            // Sampler
+                            sampler(SamplerBindingType::Filtering),
                         ),
                     ),
                 ),
