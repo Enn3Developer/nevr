@@ -86,11 +86,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let in_uv = pixel_center / vec2(view.viewport.zw);
         let d = in_uv * 2.0 - 1.0;
 
-        // TODO: fix aperture offset not applied
-        let offset = camera.aperture / 2.0 * random_in_unit_disk(&ray_seed);
-        var origin = view.world_position;
+        let camera_right = view.world_from_view[0].xyz;
+        let camera_up = view.world_from_view[1].xyz;
+        var pinhole_origin = view.world_position;
         let camera_target = view.world_from_clip * vec4(d.x, -d.y, 1.0, 1.0);
-        var direction = normalize((camera_target.xyz / camera_target.w) - origin);
+        var pinhole_direction = normalize((camera_target.xyz / camera_target.w) - pinhole_origin);
+        let focal_point = pinhole_origin + pinhole_direction * camera.focus_distance;
+        let lens_radius = camera.aperture / 2.0;
+        let rand_uv = random_in_unit_disk(&ray_seed);
+        let offset_on_lens = camera_right * rand_uv.x + camera_up * rand_uv.y;
+        var origin = pinhole_origin + offset_on_lens * lens_radius;
+        var direction = normalize(focal_point - origin);
+
         var b = u32(0);
 
         var accumulated_light = vec3(0.0);
@@ -233,7 +240,6 @@ fn miss(
 #else
     let color = textureSampleLevel(skybox, skybox_sampler, direction, 0.0).rgb;
 #endif
-
 
     *accumulated_light += color * *throughput;
 }
