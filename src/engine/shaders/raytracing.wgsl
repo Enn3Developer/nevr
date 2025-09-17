@@ -108,31 +108,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 break;
             }
 
-            let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_CULL_BACK_FACING);
+            let hit = trace_ray(origin, direction, 0.001, 10000.0, RAY_FLAG_NONE);
 
-            var scatter = vec4(0.0);
+            var scatter = false;
             if hit.kind != RAY_QUERY_INTERSECTION_NONE {
-                scatter = closest_hit(hit, &ray_seed, origin, direction, &accumulated_light, &throughput);
+                scatter = closest_hit(hit, &ray_seed, &origin, &direction, &accumulated_light, &throughput);
             } else {
-                miss(hit, origin, direction, &accumulated_light, &throughput);
+                scatter = miss(hit, &origin, &direction, &accumulated_light, &throughput);
             }
 
-            if (scatter.w > 0.0) {
-                origin = origin + hit.t * direction;
-                direction = scatter.xyz;
-            } else {
+            if (!scatter) {
                 break;
             }
 
-            let random = random_float(&ray_seed);
-            if (random >= max(throughput.r, max(throughput.g, throughput.b))) {
+            if (0.01 >= max(throughput.r, max(throughput.g, throughput.b))) {
                 break;
             }
 
             b += 1;
         }
 
-        pixel_color += vec4(accumulated_light, 1.0);
+        let color = accumulated_light * pow(2.0, view.color_grading.exposure);
+        pixel_color += vec4(color, 1.0);
     }
 
     pixel_color = pixel_color / f32(camera.samples);
@@ -186,9 +183,9 @@ fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ra
 }
 
 fn closest_hit(
-    hit: RayIntersection, seed: ptr<function, u32>, origin: vec3<f32>, direction: vec3<f32>,
+    hit: RayIntersection, seed: ptr<function, u32>, origin: ptr<function, vec3<f32>>, direction: ptr<function, vec3<f32>>,
     accumulated_light: ptr<function, vec3<f32>>, throughput: ptr<function, vec3<f32>>
-) -> vec4<f32> {
+) -> bool {
     let barycentrics = vec3(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics.x, hit.barycentrics.y);
 
     let object = objects[hit.instance_custom_data];
@@ -201,12 +198,12 @@ fn closest_hit(
     let normal = mat3x3(n0, n1, n2) * barycentrics;
     let world_normal = normalize(mat3x3(hit.object_to_world[0].xyz, hit.object_to_world[1].xyz, hit.object_to_world[2].xyz) * normal);
 
-    var hit_desc = scatter_fn(material, hit.t, seed, world_normal, direction);
+    var hit_desc = scatter_fn(material, hit.t, seed, world_normal, *direction);
 
     *accumulated_light += hit_desc.color * *throughput;
 
     if (material.material_model == MATERIAL_MODEL_LAMBERTIAN) {
-        let hit_point = origin + hit.t * direction;
+        let hit_point = *origin + hit.t * *direction;
         let light_coefficient = max(light.ambient.y * dot(-light.direction.xyz, world_normal), light.ambient.x);
 
         if (light_coefficient > 0.0) {
@@ -223,25 +220,26 @@ fn closest_hit(
     }
 
     *throughput *= hit_desc.albedo;
-    var scatter = 0.0;
-    if (hit_desc.scatter) {
-        scatter = 1.0;
-    }
 
-    return vec4(hit_desc.scatter_direction, scatter);
+    *origin = *origin + hit.t * *direction;
+    *direction = hit_desc.scatter_direction;
+
+    return hit_desc.scatter;
 }
 
 fn miss(
-    hit: RayIntersection, origin: vec3<f32>, direction: vec3<f32>,
+    hit: RayIntersection, origin: ptr<function, vec3<f32>>, direction: ptr<function, vec3<f32>>,
     accumulated_light: ptr<function, vec3<f32>>, throughput: ptr<function, vec3<f32>>
-) {
+) -> bool {
 #ifndef SKYBOX
     let color = light.sky_color.rgb;
 #else
-    let color = textureSampleLevel(skybox, skybox_sampler, direction, 0.0).rgb;
+    let color = textureSampleLevel(skybox, skybox_sampler, *direction, 0.0).rgb;
 #endif
 
     *accumulated_light += color * *throughput;
+
+    return false;
 }
 
 fn init_random_seed(val0: u32, val1: u32) -> u32 {

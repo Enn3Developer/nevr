@@ -11,7 +11,7 @@ use bevy::render::render_resource::encase::internal::{
 };
 use bevy::render::render_resource::encase::private::{Metadata, WriteInto};
 use bevy::render::render_resource::{ShaderType, TextureUsages};
-use bevy::render::view::Hdr;
+use bevy::render::view::{ColorGrading, Hdr};
 use bytemuck::{Pod, Zeroable};
 use std::ops::Deref;
 
@@ -26,6 +26,7 @@ use std::ops::Deref;
     Camera2d::default(),
     Hdr,
     Msaa::Off,
+    ColorGrading::default(),
     CameraRenderGraph::new(Core3d),
     CameraMainTextureUsages(
         TextureUsages::RENDER_ATTACHMENT
