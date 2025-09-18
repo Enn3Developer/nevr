@@ -50,10 +50,12 @@ use crate::engine::voxel::{
     RenderVoxelBlock, RenderVoxelType, VoxelBlock, VoxelMaterial, VoxelType,
 };
 use bevy::app::App;
+use bevy::diagnostic::FrameCount;
 use bevy::image::ToExtents;
 use bevy::prelude::{
-    AssetApp, Commands, Component, Entity, FromWorld, GlobalTransform, InheritedVisibility,
-    IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut, Resource, UVec4, Vec4, With, World,
+    AssetApp, Changed, Commands, Component, DetectChanges, Entity, FromWorld, GlobalTransform,
+    InheritedVisibility, IntoScheduleConfigs, Mat4, Or, Plugin, PostUpdate, Projection, Query, Ref,
+    Res, ResMut, Resource, Transform, UVec4, Vec4, With, World,
 };
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
@@ -72,8 +74,9 @@ use bevy::render::render_resource::{
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::settings::WgpuFeatures;
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::ViewUniform;
+use bevy::render::view::{ColorGrading, ViewUniform};
 use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::transform::systems::propagate_parent_transforms;
 
 /// Default plugin for NEVR.
 ///
@@ -111,7 +114,11 @@ impl Plugin for NEVRPlugin {
             .add_plugins(ExtractComponentPlugin::<VoxelCamera>::default())
             .init_asset::<VoxelMaterial>()
             .init_asset::<VoxelType>()
-            .init_resource::<VoxelLight>();
+            .init_resource::<VoxelLight>()
+            .add_systems(
+                PostUpdate,
+                reset_frame_count.after(propagate_parent_transforms),
+            );
     }
 
     fn finish(&self, app: &mut App) {
@@ -241,6 +248,11 @@ impl FromWorld for VoxelBindings {
                             uniform_buffer::<RenderVoxelLight>(false),
                             // View
                             uniform_buffer::<ViewUniform>(true),
+                            // Accumulation Texture
+                            texture_storage_2d(
+                                TextureFormat::Rgba16Float,
+                                StorageTextureAccess::ReadWrite,
+                            ),
                         ),
                     ),
                 ),
@@ -286,7 +298,10 @@ impl FromWorld for VoxelBindings {
 
 /// Texture view target used for rendering.
 #[derive(Component)]
-pub struct VoxelViewTarget(pub CachedTexture);
+pub struct VoxelViewTarget {
+    pub output: CachedTexture,
+    pub accumulation: CachedTexture,
+}
 
 /// Texture views for g-buffer's data (used for denoising)
 #[derive(Component)]
@@ -311,6 +326,17 @@ fn prepare_view_target(
 
         let target_descriptor = TextureDescriptor {
             label: Some("voxel_raytracing_view_target"),
+            size: viewport.to_extents(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+
+        let accumulation_descriptor = TextureDescriptor {
+            label: Some("voxel_raytracing_accumulation"),
             size: viewport.to_extents(),
             mip_level_count: 1,
             sample_count: 1,
@@ -380,9 +406,10 @@ fn prepare_view_target(
 
         commands
             .entity(entity)
-            .insert(VoxelViewTarget(
-                texture_cache.get(&render_device, target_descriptor),
-            ))
+            .insert(VoxelViewTarget {
+                output: texture_cache.get(&render_device, target_descriptor),
+                accumulation: texture_cache.get(&render_device, accumulation_descriptor),
+            })
             .insert(VoxelGBuffer {
                 albedo: texture_cache.get(&render_device, albedo_descriptor),
                 normal: texture_cache.get(&render_device, normal_descriptor),
@@ -494,6 +521,32 @@ pub fn prepare_bindings(
             material_map.as_entire_binding(),
         )),
     ));
+}
+
+pub fn reset_frame_count(
+    camera_query: Query<
+        (
+            Ref<VoxelCamera>,
+            Ref<GlobalTransform>,
+            Ref<Projection>,
+            Ref<ColorGrading>,
+        ),
+        With<VoxelCamera>,
+    >,
+    mut frame_count: ResMut<FrameCount>,
+) {
+    let mut changed = false;
+
+    for (camera, transform, projection, color_grading) in camera_query.iter() {
+        changed = camera.is_changed()
+            || transform.is_changed()
+            || projection.is_changed()
+            || color_grading.is_changed();
+    }
+
+    if changed {
+        frame_count.0 = 0;
+    }
 }
 
 fn tlas_transform(transform: &Mat4) -> [f32; 12] {

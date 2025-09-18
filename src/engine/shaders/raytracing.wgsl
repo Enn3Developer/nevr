@@ -58,6 +58,7 @@ const RAY_NO_CULL = 0xFFu;
 @group(1) @binding(1) var view_output: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(2) var<uniform> light: Light;
 @group(1) @binding(3) var<uniform> view: View;
+@group(1) @binding(4) var accumulation: texture_storage_2d<rgba16float, read_write>;
 
 @group(2) @binding(0) var albedo_texture: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(1) var normal_texture: texture_storage_2d<rgba16float, write>;
@@ -134,6 +135,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     pixel_color = pixel_color / f32(camera.samples);
 
+    if (view.frame_count > 0) {
+        let old_color = textureLoad(accumulation, global_id.xy);
+        pixel_color = (old_color * f32(view.frame_count) + pixel_color) / (f32(view.frame_count) + 1.0);
+    }
+
+    textureStore(accumulation, global_id.xy, pixel_color);
     textureStore(view_output, global_id.xy, pixel_color);
 }
 
@@ -204,11 +211,21 @@ fn closest_hit(
 
     if (material.material_model == MATERIAL_MODEL_LAMBERTIAN) {
         let hit_point = *origin + hit.t * *direction;
-        let light_coefficient = max(light.ambient.y * dot(-light.direction.xyz, world_normal), light.ambient.x);
+        let rand1 = random_float(seed);
+        let rand2 = random_float(seed);
+        let cos_theta = 1.0 - rand1 * (1.0 - cos(0.00925));
+        let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+        let phi = 2.0 * 3.14 * rand2;
+        let up_vector = -light.direction.xyz;
+        let right_vector = normalize(cross(vec3(0.0, 1.0, 0.0), up_vector));
+        let forward_vector = normalize(cross(up_vector, right_vector));
+        let basis = mat3x3(right_vector, forward_vector, up_vector);
+        let light_direction = basis * vec3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
+        let light_coefficient = max(light.ambient.y * dot(light_direction, world_normal), light.ambient.x);
 
         if (light_coefficient > 0.0) {
-            let shadow_origin = hit_point + world_normal * 0.001;
-            let shadow_direction = -light.direction.xyz;
+            let shadow_origin = hit_point + world_normal * 0.0001;
+            let shadow_direction = light_direction;
             let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE | RAY_FLAG_CULL_BACK_FACING;
             let shadow_hit = trace_ray(shadow_origin, shadow_direction, 0.001, 10000.0, flags);
 

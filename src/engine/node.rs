@@ -143,9 +143,10 @@ impl ViewNode for NEVRNode {
             &voxel_bindings.bind_group_layouts[1],
             &BindGroupEntries::sequential((
                 camera_uniform.binding().unwrap(),
-                &voxel_view_target.0.default_view,
+                &voxel_view_target.output.default_view,
                 light_uniform.binding().unwrap(),
                 view_uniforms.clone(),
+                &voxel_view_target.accumulation.default_view,
             )),
         );
 
