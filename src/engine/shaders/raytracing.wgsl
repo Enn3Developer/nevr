@@ -129,7 +129,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             b += 1;
         }
 
-        let color = accumulated_light * pow(2.0, view.color_grading.exposure);
+        let color = accumulated_light;
         pixel_color += vec4(color, 1.0);
     }
 
@@ -226,7 +226,7 @@ fn closest_hit(
         if (light_coefficient > 0.0) {
             let shadow_origin = hit_point + world_normal * 0.0001;
             let shadow_direction = light_direction;
-            let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE | RAY_FLAG_CULL_BACK_FACING;
+            let flags = RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_CULL_NO_OPAQUE;
             let shadow_hit = trace_ray(shadow_origin, shadow_direction, 0.001, 10000.0, flags);
 
             if (shadow_hit.kind == RAY_QUERY_INTERSECTION_NONE) {

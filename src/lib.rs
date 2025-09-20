@@ -53,9 +53,9 @@ use bevy::app::App;
 use bevy::diagnostic::FrameCount;
 use bevy::image::ToExtents;
 use bevy::prelude::{
-    AssetApp, Changed, Commands, Component, DetectChanges, Entity, FromWorld, GlobalTransform,
-    InheritedVisibility, IntoScheduleConfigs, Mat4, Or, Plugin, PostUpdate, Projection, Query, Ref,
-    Res, ResMut, Resource, Transform, UVec4, Vec4, With, World,
+    AssetApp, Commands, Component, DetectChanges, Entity, FromWorld, GlobalTransform,
+    InheritedVisibility, IntoScheduleConfigs, Mat4, Plugin, PostUpdate, Projection, Query, Ref,
+    Res, ResMut, Resource, UVec4, Vec4, With, World,
 };
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
@@ -74,7 +74,7 @@ use bevy::render::render_resource::{
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::settings::WgpuFeatures;
 use bevy::render::texture::{CachedTexture, TextureCache};
-use bevy::render::view::{ColorGrading, ViewUniform};
+use bevy::render::view::ViewUniform;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::transform::systems::propagate_parent_transforms;
 
@@ -525,27 +525,19 @@ pub fn prepare_bindings(
 
 pub fn reset_frame_count(
     camera_query: Query<
-        (
-            Ref<VoxelCamera>,
-            Ref<GlobalTransform>,
-            Ref<Projection>,
-            Ref<ColorGrading>,
-        ),
+        (Ref<VoxelCamera>, Ref<GlobalTransform>, Ref<Projection>),
         With<VoxelCamera>,
     >,
     mut frame_count: ResMut<FrameCount>,
 ) {
     let mut changed = false;
 
-    for (camera, transform, projection, color_grading) in camera_query.iter() {
-        changed = camera.is_changed()
-            || transform.is_changed()
-            || projection.is_changed()
-            || color_grading.is_changed();
+    for (camera, transform, projection) in camera_query.iter() {
+        changed = camera.is_changed() || transform.is_changed() || projection.is_changed();
     }
 
     if changed {
-        frame_count.0 = 0;
+        frame_count.0 = u32::MAX;
     }
 }
 

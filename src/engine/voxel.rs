@@ -7,7 +7,7 @@ use bevy::ecs::system::SystemParamItem;
 use bevy::ecs::system::lifetimeless::SRes;
 use bevy::prelude::{
     Asset, Color, ColorToComponents, Component, GlobalTransform, Handle, InheritedVisibility,
-    LinearRgba, Srgba, Transform, TypePath, Vec3, Visibility,
+    LinearRgba, Transform, TypePath, Vec3, Visibility,
 };
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset};
