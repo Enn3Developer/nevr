@@ -53,15 +53,24 @@ pub struct VoxelCamera {
     pub samples: u32,
     /// The maximum number of bounces per ray (used only when hitting something).
     pub bounces: u32,
+    /// Enable temporal accumulation to reduce noise using old frames (you have to reset the [bevy::diagnostic::FrameCount] when needed)
+    pub temporal_accumulation: bool,
 }
 
 impl VoxelCamera {
-    pub fn new(aperture: f32, focus_distance: f32, samples: u32, bounces: u32) -> Self {
+    pub fn new(
+        aperture: f32,
+        focus_distance: f32,
+        samples: u32,
+        bounces: u32,
+        temporal_accumulation: bool,
+    ) -> Self {
         Self {
             aperture,
             focus_distance,
             samples,
             bounces,
+            temporal_accumulation,
         }
     }
 
@@ -84,11 +93,16 @@ impl VoxelCamera {
         self.bounces = bounces;
         self
     }
+
+    pub fn with_temporal_accumulation(mut self, temporal_accumulation: bool) -> Self {
+        self.temporal_accumulation = temporal_accumulation;
+        self
+    }
 }
 
 impl Default for VoxelCamera {
     fn default() -> Self {
-        Self::new(0.0, 3.4, 10, 5)
+        Self::new(0.0, 3.4, 10, 5, false)
     }
 }
 
@@ -109,6 +123,7 @@ pub struct RayCamera {
     focus_distance: f32,
     samples: u32,
     bounces: u32,
+    temporal_accumulation: u32,
 }
 
 impl<C: Deref<Target = VoxelCamera>> From<C> for RayCamera {
@@ -118,6 +133,7 @@ impl<C: Deref<Target = VoxelCamera>> From<C> for RayCamera {
             focus_distance: camera.focus_distance,
             samples: camera.samples,
             bounces: camera.bounces,
+            temporal_accumulation: if camera.temporal_accumulation { 1 } else { 0 },
         }
     }
 }
@@ -127,7 +143,7 @@ impl ShaderType for RayCamera {
     const METADATA: Metadata<Self::ExtraMetadata> = Metadata {
         alignment: AlignmentValue::new(4),
         has_uniform_min_alignment: false,
-        min_size: SizeValue::new(16),
+        min_size: SizeValue::new(20),
         is_pod: false,
         extra: (),
     };
@@ -142,5 +158,6 @@ impl WriteInto for RayCamera {
         writer.write(&self.focus_distance.to_le_bytes());
         writer.write(&self.samples.to_le_bytes());
         writer.write(&self.bounces.to_le_bytes());
+        writer.write(&self.temporal_accumulation.to_le_bytes());
     }
 }

@@ -50,12 +50,10 @@ use crate::engine::voxel::{
     RenderVoxelBlock, RenderVoxelType, VoxelBlock, VoxelMaterial, VoxelType,
 };
 use bevy::app::App;
-use bevy::diagnostic::FrameCount;
 use bevy::image::ToExtents;
 use bevy::prelude::{
-    AssetApp, Commands, Component, DetectChanges, Entity, FromWorld, GlobalTransform,
-    InheritedVisibility, IntoScheduleConfigs, Mat4, Plugin, PostUpdate, Projection, Query, Ref,
-    Res, ResMut, Resource, UVec4, Vec4, With, World,
+    AssetApp, Commands, Component, Entity, FromWorld, GlobalTransform, InheritedVisibility,
+    IntoScheduleConfigs, Mat4, Plugin, Query, Res, ResMut, Resource, UVec4, Vec4, With, World,
 };
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
@@ -76,7 +74,6 @@ use bevy::render::settings::WgpuFeatures;
 use bevy::render::texture::{CachedTexture, TextureCache};
 use bevy::render::view::ViewUniform;
 use bevy::render::{Render, RenderApp, RenderSystems};
-use bevy::transform::systems::propagate_parent_transforms;
 
 /// Default plugin for NEVR.
 ///
@@ -114,11 +111,7 @@ impl Plugin for NEVRPlugin {
             .add_plugins(ExtractComponentPlugin::<VoxelCamera>::default())
             .init_asset::<VoxelMaterial>()
             .init_asset::<VoxelType>()
-            .init_resource::<VoxelLight>()
-            .add_systems(
-                PostUpdate,
-                reset_frame_count.after(propagate_parent_transforms),
-            );
+            .init_resource::<VoxelLight>();
     }
 
     fn finish(&self, app: &mut App) {
@@ -521,24 +514,6 @@ pub fn prepare_bindings(
             material_map.as_entire_binding(),
         )),
     ));
-}
-
-pub fn reset_frame_count(
-    camera_query: Query<
-        (Ref<VoxelCamera>, Ref<GlobalTransform>, Ref<Projection>),
-        With<VoxelCamera>,
-    >,
-    mut frame_count: ResMut<FrameCount>,
-) {
-    let mut changed = false;
-
-    for (camera, transform, projection) in camera_query.iter() {
-        changed = camera.is_changed() || transform.is_changed() || projection.is_changed();
-    }
-
-    if changed {
-        frame_count.0 = u32::MAX;
-    }
 }
 
 fn tlas_transform(transform: &Mat4) -> [f32; 12] {

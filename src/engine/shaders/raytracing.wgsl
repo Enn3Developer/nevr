@@ -5,6 +5,7 @@ struct Camera {
     focus_distance: f32,
     samples: u32,
     bounces: u32,
+    temporal_accumulation: u32,
 }
 
 struct Light {
@@ -135,7 +136,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     pixel_color = pixel_color / f32(camera.samples);
 
-    if (view.frame_count > 0) {
+    if (view.frame_count > 0 && camera.temporal_accumulation > 0) {
         let old_color = textureLoad(accumulation, global_id.xy);
         pixel_color = (old_color * f32(view.frame_count) + pixel_color) / (f32(view.frame_count) + 1.0);
     }
